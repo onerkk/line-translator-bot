@@ -73,7 +73,14 @@ def _degroup_thousands(text: str) -> str:
     """Indonesian writes 4000 as "4.000" (and 12500 as "12.500"); English as
     "4,000". Remove grouping separators so a correct "4.000 ton" is not
     reported as a missing 4000噸 (which silently blocked a whole notice)."""
-    return _THOUSANDS_GROUPED_RE.sub(lambda m: re.sub(r"[.,\u00a0 ]", "", m.group(0)), str(text or ""))
+    text = _THOUSANDS_GROUPED_RE.sub(lambda m: re.sub(r"[.,\u00a0 ]", "", m.group(0)), str(text or ""))
+
+    # "4 ribu ton" / "1,5 juta" are also correct Indonesian for 4000 / 1500000.
+    def _scale(match):
+        value = float(match.group(1).replace(",", "."))
+        result = value * (1000 if match.group(2).lower() == "ribu" else 1000000)
+        return str(int(result)) if result == int(result) else str(result)
+    return re.sub(r"(?<![\d.,])(\d+(?:[.,]\d+)?)\s*(ribu|juta)\b", _scale, text, flags=re.I)
 
 
 class GuardConfigurationError(ValueError):

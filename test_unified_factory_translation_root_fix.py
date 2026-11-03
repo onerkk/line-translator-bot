@@ -116,7 +116,7 @@ class UnifiedFactoryTranslationRootFixTests(unittest.TestCase):
         self.assertIn('startswith("id")', helper)
         self.assertIn("target_aliases", helper)
         self.assertIn("_hard_glossary_issues", function_body("is_translation_acceptable"))
-        self.assertIn("_hard_glossary_issues", function_body("_delivery_validation_issues"))
+        self.assertIn("_hard_glossary_issues", function_body("_delivery_validation_issues_impl"))
         self.assertIn("_hard_glossary_issues", function_body("_tm_bypass_integrity_ok"))
         self.assertIn('"glossary": globals().get("GLOSSARY_LOOKUP", {})', function_body("_translation_cache_asset_fingerprint"))
 

@@ -99,3 +99,18 @@ def test_indonesian_thousands_separator_is_not_a_missing_quantity(monkeypatch):
     monkeypatch.setattr(app.ai.chat.completions, "create", lambda **kw: response(NOTICE_ID))
     app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
     assert app.translate(NOTICE, "zh", "id").startswith("Target bulan November 4.000 ton")
+
+
+def test_failure_diagnostics_carry_the_rejection_reason(monkeypatch):
+    seen = []
+    monkeypatch.setattr(app, "_event_log_write", lambda t, d: seen.append(d))
+    app._tl.__dict__.clear(); app._tl.group_id = "Cx"
+    issues = app._delivery_validation_issues(NOTICE, NOTICE_ID.replace("4.000", "400"), "zh", "id")
+    assert issues
+    app._set_translation_outcome("failed", "empty_or_rejected_translation")
+    assert seen[-1]["issues"] and seen[-1]["candidate"].startswith("Target bulan November 400")
+
+
+def test_indonesian_scale_words_count_as_the_same_quantity():
+    assert app._delivery_validation_issues(NOTICE, NOTICE_ID.replace("4.000 ton", "4 ribu ton"), "zh", "id") == []
+    assert app._delivery_validation_issues(NOTICE, NOTICE_ID.replace("4.000 ton", "3 ribu ton"), "zh", "id")

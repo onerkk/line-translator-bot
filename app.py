@@ -2508,7 +2508,12 @@ def _set_translation_outcome(status, reason="", **details):
     if payload["status"] != "delivered":
         # Durable "why wasn't this translated" evidence (see _DIAG_KV_KEY).
         try:
-            _event_log_write("translation_outcome", dict(payload, group_id=str(getattr(_tl, "group_id", "") or "")))
+            _extra = {"group_id": str(getattr(_tl, "group_id", "") or "")}
+            _rej = getattr(_tl, "last_rejection", None)
+            if payload["status"] == "failed" and isinstance(_rej, dict):
+                _extra["issues"] = _rej.get("issues")
+                _extra["candidate"] = _rej.get("candidate")
+            _event_log_write("translation_outcome", dict(payload, **_extra))
         except Exception:
             pass
     return payload
@@ -12530,6 +12535,18 @@ def _factory_exact_fallback(source_text, src, tgt):
 
 
 def _delivery_validation_issues(source_text, candidate, src, tgt):
+    issues = _delivery_validation_issues_impl(source_text, candidate, src, tgt)
+    if issues:
+        # Keep the last rejection reason for /診斷 (see _set_translation_outcome).
+        try:
+            _tl.last_rejection = {"issues": [str(i)[:80] for i in list(issues)[:6]],
+                                  "candidate": str(candidate or "")[:120]}
+        except Exception:
+            pass
+    return issues
+
+
+def _delivery_validation_issues_impl(source_text, candidate, src, tgt):
     """Collect current generic + factory hard issues for candidate comparison."""
     if not candidate or not isinstance(candidate, str):
         return ["empty_candidate"]
@@ -14267,6 +14284,7 @@ def translate(text, src, tgt):
         "context_result_cacheable",
         "learning_rejections", "generated_candidate", "nmt_attempted",
         "translation_alignment_issues", "translation_effort_boost", "review_repair_done",
+        "last_rejection",
     ):
         if hasattr(_tl, _request_attr):
             delattr(_tl, _request_attr)
@@ -20288,6 +20306,10 @@ def handle_message(event):
                     _parts.append("{} {} {} {}".format(
                         _taiwan_time_str(_e.get("ts", 0)), _e.get("type", ""),
                         _d.get("status", "") or "", _d.get("reason", "") or "").strip())
+                    if _d.get("issues"):
+                        _parts.append("   原因：" + "；".join(str(x) for x in list(_d.get("issues"))[:3]))
+                    if _d.get("candidate"):
+                        _parts.append("   被擋譯文：" + str(_d.get("candidate"))[:60])
                     if _d.get("text"):
                         _parts.append("   「" + str(_d.get("text"))[:40] + "」")
                 _diag_text = "\n".join(_parts)
