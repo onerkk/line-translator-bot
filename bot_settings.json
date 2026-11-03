@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.50.0-claude-5-5-gpt-6-prompt-cache-root-fix-2026-10-20",
     "schema_version": 8,
-    "state_hash": "f8cd2956ea828090b9fe5f258b0ee3804e306bae50eb2b8c2db03e5848e6509f",
-    "updated_at_iso": "2026-10-28T10:32:34.967071+00:00",
-    "updated_at_unix": 1793183554.9670713
+    "state_hash": "a65745e43622fb0cf503de15e162ab6983151c6395a0dda80e8bd99ee4f9f1dc",
+    "updated_at_iso": "2026-11-03T18:50:06.960497+00:00",
+    "updated_at_unix": 1793731806.960497
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -156,7 +156,7 @@
       "gpt-6-luna": "gemini-3.1-flash-lite",
       "gpt-6.1-sol": "gemini-2.5-flash"
     },
-    "last_updated": "2026-10-25 18:27:35",
+    "last_updated": "2026-11-03 16:55:05",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5-5",
       "gpt-4.1-mini": "claude-haiku-5-5",
@@ -259,7 +259,8 @@
   "double_check_keywords": "maaf,maafkan,sori,ampun,salah,gak akan,bukan saya,jangan salah,對不起,抱歉,請原諒,誤會,搞錯,放錯,弄錯,搞混",
   "double_check_mode": "off",
   "double_check_threshold": 0.55,
-  "expressive_emoji_enabled": true,
+  "emoji_policy_author_only_20261029": true,
+  "expressive_emoji_enabled": false,
   "expressive_formal_safety_enabled": true,
   "expressive_images_enabled": true,
   "expressive_short_message_image_enabled": true,
@@ -588,6 +589,7 @@
       "U272fe699db752d78eb7dcf7ae03fbcc3": "Hasim",
       "U54c702066e93a5d54e2e12ea5bc258c6": "許凱銘",
       "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
+      "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
       "U7cb9d2608183ea3b37ef17abff19e33a": "Agus Sw 鐸多",
       "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
       "U96c3e9076800170fbd92891e5419ce3b": "khoirul",
