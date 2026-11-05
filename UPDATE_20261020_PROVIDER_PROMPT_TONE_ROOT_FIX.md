@@ -306,4 +306,6 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
 - 正確：料不圓、料從前站過來時尺寸就已經偏小、削皮站吊運夾傷（截圖可見部分）。
 - 已修：「晚班2400跟0730都要回報」譯成 pukul 2400 → pukul 24.00／07.30（規則：班別／回報語境的四位數時刻；後接單位的仍是數量）。
 - 已修：「Di bagian ada titik hitam tidak bulat」譯成「不是圓形的」→「有黑點的那一段不圓」（規則：tidak bulat＝不圓）。
-- 待確認：「沒加套環」的套環在印尼同事口中怎麼說（原譯 Cincin Pelindung，且大寫不自然）。
+- 套環：老闆確認沿用 Cincin Pelindung。既有工單詞庫本來就把它定為工單欄位名稱（大寫 Cincin Pelindung），原譯正確，不另改。
+- 同類根治：AI 有時把小寫術語在句中大寫（例 Batang Profil Khusus）。翻譯出口把「詞庫定義為小寫」的術語在句中改回小寫、
+  句首保留大寫；詞庫本身帶大寫的（Cincin Pelindung、Stasiun packing peeling）照詞庫不動。純本機處理。

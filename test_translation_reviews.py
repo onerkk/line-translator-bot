@@ -500,3 +500,14 @@ def test_hhmm_time_rule_and_out_of_round_rule_route_correctly():
     assert hit("早班0730跟1530要回報數量", "zh", "id", "hhmm-report-times")
     assert not hit("今天入庫2400噸", "zh", "id", "hhmm-report-times")       # a quantity, not a time
     assert hit("Batangnya tidak bulat, ukurannya kecil", "id", "zh", "tidak-bulat-out-of-round")
+
+
+def test_glossary_common_nouns_are_lowercase_mid_sentence():
+    import app
+    # lowercase canonicals are normalised mid-sentence; sentence start keeps its capital
+    assert app._normalize_glossary_case("異型棒優先", "Prioritaskan Batang Profil Khusus. Batang profil khusus dulu.") == \
+        "Prioritaskan batang profil khusus. Batang profil khusus dulu."
+    # canonicals with their own capitals are left as defined (套環 = Cincin Pelindung, a work-order field name)
+    assert app._normalize_glossary_case("沒加套環", "Tidak dipasang Cincin Pelindung.") == "Tidak dipasang Cincin Pelindung."
+    assert app._normalize_glossary_case("削皮包裝站", "Di Stasiun packing peeling ada masalah.") == \
+        "Di Stasiun packing peeling ada masalah."

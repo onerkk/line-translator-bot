@@ -16301,6 +16301,35 @@ def _translate_paragraphs_separately(text, src, tgt, translate_fn):
 
 
 
+def _normalize_glossary_case(source, translated):
+    """Glossary common nouns keep their lowercase form mid-sentence.
+
+    Models often title-case a technical term ("tidak dipasang Cincin
+    Pelindung"); the glossary canonical is lowercase, so a mid-sentence match
+    is rewritten to it, while a sentence-initial match keeps its capital.
+    Canonicals that carry their own capitals (Stasiun packing peeling, MES) are
+    left alone.
+    """
+    if not source or not translated:
+        return translated
+    result = translated
+    for zh_key, entry in (GLOSSARY_LOOKUP or {}).items():
+        if not zh_key or zh_key not in source or not isinstance(entry, dict):
+            continue
+        canon = str(entry.get("idn") or entry.get("canonical_idn") or "").strip()
+        if len(canon) < 3 or canon != canon.lower() or not re.search(r"[a-z]", canon):
+            continue
+        pattern = re.compile(r"(?<![\w])" + re.escape(canon) + r"(?![\w])", re.IGNORECASE)
+
+        def _fix(match, _canon=canon, _text=result):
+            start = match.start()
+            before = _text[:start].rstrip(" \t\"'(「")
+            sentence_start = (not before) or before.endswith((".", "!", "?", "\n", "。", "！", "？", ":"))
+            return (_canon[0].upper() + _canon[1:]) if sentence_start else _canon
+        result = pattern.sub(_fix, result)
+    return result
+
+
 _translate_unsanitized = translate
 
 
@@ -16320,6 +16349,11 @@ def translate(text, src, tgt):
             cleaned = translation_extras_module.restore_source_emoji(text, cleaned)
         except Exception:
             pass
+        if str(tgt or "").lower().startswith("id"):
+            try:
+                cleaned = _normalize_glossary_case(text, cleaned)
+            except Exception:
+                pass
         if cleaned and cleaned != result:
             try:
                 _event_log_write("translation_exit_normalized", {
