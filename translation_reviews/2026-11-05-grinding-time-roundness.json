@@ -1,0 +1,75 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-05-grinding-time-roundness",
+ "source": "screenshot review by Claude, 研磨C班 22:11 / 研磨股印尼 21:28–21:48",
+ "items": [
+  {
+   "id": "hhmm-report-times",
+   "src": "zh",
+   "tgt": "id",
+   "source": "異型棒再幫忙優先包裝入庫，晚班2400跟0730都要回報",
+   "observed": "Mohon bantu prioritaskan pengemasan dan pemasukan batang profil khusus ke gudang. Shift malam harus melapor pada pukul 2400 dan 0730.",
+   "corrected": "Mohon bantu prioritaskan pengemasan dan pemasukan batang profil khusus ke gudang. Shift malam harus melapor pada pukul 24.00 dan 07.30.",
+   "category": "number_unit",
+   "reason": "「2400、0730」是時刻（24:00、07:30），印尼文時間寫 pukul 24.00／07.30；原譯 pukul 2400 看起來像數量。",
+   "rule": {
+    "when": [
+     [
+      "晚班",
+      "早班",
+      "中班",
+      "夜班",
+      "回報",
+      "交班",
+      "點名",
+      "集合",
+      "打卡",
+      "前",
+      "後"
+     ]
+    ],
+    "regex_any": [
+     "(?<![\\d.:])(?:[01]\\d|2[0-4])[0-5]\\d(?![\\d.:])\\s*(?:跟|和|、|及|前|後|点|點|回報|回报|集合|交班|$)"
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "四位數時刻（2400、0730）寫成 pukul 24.00",
+    "context": [
+     "班別、回報、交班語境裡的四位數字（2400、0730、1530）是時刻，印尼文寫 pukul 24.00、pukul 07.30、pukul 15.30；不要照抄成 pukul 2400。",
+     "後面有單位（kg、噸、支、把）就是數量，照原文。"
+    ]
+   }
+  },
+  {
+   "id": "tidak-bulat-out-of-round",
+   "src": "id",
+   "tgt": "zh",
+   "source": "Di bagian ada titik hitam tidak bulat",
+   "observed": "部位上有黑點，不是圓形的",
+   "corrected": "有黑點的那一段不圓。",
+   "category": "term",
+   "reason": "量測／外觀語境的 tidak bulat 是工廠說的「不圓」（真圓度不良），同群組另一則 Barang tidak bulat 也譯成「料不圓」；「不是圓形的」聽起來像形狀錯了。",
+   "rule": {
+    "when": [
+     [
+      "tidak bulat",
+      "nggak bulat",
+      "gak bulat",
+      "tdk bulat"
+     ]
+    ],
+    "directions": [
+     "id-zh"
+    ],
+    "title": "tidak bulat＝不圓（真圓度不良）",
+    "context": [
+     "棒材量測、外觀檢查語境的 tidak bulat 譯「不圓」；ada titik hitam 是「有黑點」。不要譯成「不是圓形的」。"
+    ],
+    "forbidden": [
+     "不是圓形"
+    ]
+   }
+  }
+ ]
+}

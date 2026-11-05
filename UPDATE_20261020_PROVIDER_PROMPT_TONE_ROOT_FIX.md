@@ -301,3 +301,9 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
 - 整體正確；「吊回去」被譯成 pindahkan kembali（移回去），改為 angkat kembali untuk dicuci lagi（bundle `2026-11-04-oily-bars-hoist-back`）。
 - 同類根治：語意稽核只認 mengangkat 這種 me- 動詞與「keluhan pelanggan」固定寫法，命令句的 angkat／naikkan 和
   「keluhan dari pelanggan」這些自然說法都被誤判缺漏，會讓正確的修正範例被拒收。改為接受基本形與常見變化，真的漏掉仍會抓到。
+
+## 2026-11-05 審核（bundle `2026-11-05-grinding-time-roundness`）
+- 正確：料不圓、料從前站過來時尺寸就已經偏小、削皮站吊運夾傷（截圖可見部分）。
+- 已修：「晚班2400跟0730都要回報」譯成 pukul 2400 → pukul 24.00／07.30（規則：班別／回報語境的四位數時刻；後接單位的仍是數量）。
+- 已修：「Di bagian ada titik hitam tidak bulat」譯成「不是圓形的」→「有黑點的那一段不圓」（規則：tidak bulat＝不圓）。
+- 待確認：「沒加套環」的套環在印尼同事口中怎麼說（原譯 Cincin Pelindung，且大寫不自然）。

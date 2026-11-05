@@ -490,3 +490,13 @@ def test_semantic_audit_accepts_natural_indonesian_forms():
     assert "factory_semantic_audit:customer_complaint_missing" not in ok_issues
     bad_issues = audit.validate_translation(frame, "Kalau kotor, cuci saja. Nanti repot.")[1]
     assert "factory_semantic_audit:customer_complaint_missing" in bad_issues
+
+
+def test_hhmm_time_rule_and_out_of_round_rule_route_correctly():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def hit(text, src, tgt, suffix):
+        return any(c["id"].endswith(suffix) for c in store.retrieve(text, src, tgt, limit=6))
+    assert hit("早班0730跟1530要回報數量", "zh", "id", "hhmm-report-times")
+    assert not hit("今天入庫2400噸", "zh", "id", "hhmm-report-times")       # a quantity, not a time
+    assert hit("Batangnya tidak bulat, ukurannya kecil", "id", "zh", "tidak-bulat-out-of-round")
