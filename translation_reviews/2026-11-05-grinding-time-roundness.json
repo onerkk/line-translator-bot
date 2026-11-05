@@ -70,6 +70,50 @@
      "不是圓形"
     ]
    }
+  },
+  {
+   "id": "barang-sebagian-hitam",
+   "src": "id",
+   "tgt": "zh",
+   "source": "Barang sebagian hitam tidak bulat",
+   "observed": "部分發黑、不圓",
+   "corrected": "料有一部分發黑，而且不圓。",
+   "category": "tone",
+   "reason": "語意對但不通順：漏了主詞「料」，用頓號把兩個狀況列成清單，像表格欄位不像一句話。",
+   "rule": {
+    "when": [
+     [
+      "barang",
+      "material",
+      "batang",
+      "bahan",
+      "bundel"
+     ],
+     [
+      "tidak",
+      "hitam",
+      "kotor",
+      "bengkok",
+      "retak",
+      "pendek",
+      "kecil",
+      "besar",
+      "bulat",
+      "lecet",
+      "karat",
+      "goresan",
+      "penyok"
+     ]
+    ],
+    "directions": [
+     "id-zh"
+    ],
+    "title": "印尼同事回報料況：譯成通順完整的中文句",
+    "context": [
+     "印尼同事回報料的狀況（發黑、不圓、彎、刮傷、尺寸偏小…）時，譯成現場會講的完整中文句：保留主詞「料／這捆／這支」，",
+     "多個狀況用「，而且／也」連起來，不要用頓號（、）列成清單，也不要只剩欄位式的短語。例：Barang sebagian hitam tidak bulat →「料有一部分發黑，而且不圓。」"
+    ]
+   }
   }
  ]
 }

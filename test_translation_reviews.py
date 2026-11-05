@@ -511,3 +511,13 @@ def test_glossary_common_nouns_are_lowercase_mid_sentence():
     assert app._normalize_glossary_case("沒加套環", "Tidak dipasang Cincin Pelindung.") == "Tidak dipasang Cincin Pelindung."
     assert app._normalize_glossary_case("削皮包裝站", "Di Stasiun packing peeling ada masalah.") == \
         "Di Stasiun packing peeling ada masalah."
+
+
+def test_material_condition_reports_get_the_fluency_rule():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def hit(text):
+        return any(c["id"].endswith("barang-sebagian-hitam") for c in store.retrieve(text, "id", "zh", limit=6))
+    assert hit("Batang ini bengkok dan ada goresan")
+    assert hit("Barang sebagian hitam tidak bulat")
+    assert not hit("Terima kasih ya")

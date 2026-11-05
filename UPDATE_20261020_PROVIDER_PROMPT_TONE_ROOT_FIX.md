@@ -309,3 +309,5 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
 - 套環：老闆確認沿用 Cincin Pelindung。既有工單詞庫本來就把它定為工單欄位名稱（大寫 Cincin Pelindung），原譯正確，不另改。
 - 同類根治：AI 有時把小寫術語在句中大寫（例 Batang Profil Khusus）。翻譯出口把「詞庫定義為小寫」的術語在句中改回小寫、
   句首保留大寫；詞庫本身帶大寫的（Cincin Pelindung、Stasiun packing peeling）照詞庫不動。純本機處理。
+- 「Barang sebagian hitam tidak bulat」譯成「部分發黑、不圓」：意思對但不通順（漏主詞、用頓號列清單）。改為「料有一部分發黑，而且不圓。」
+  並新增通用規則：印尼同事回報料況（發黑、不圓、彎、刮傷、偏小…）一律譯成保留主詞、用「而且／也」連接的完整中文句。
