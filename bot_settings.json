@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.50.0-claude-5-5-gpt-6-prompt-cache-root-fix-2026-10-20",
     "schema_version": 8,
-    "state_hash": "a65745e43622fb0cf503de15e162ab6983151c6395a0dda80e8bd99ee4f9f1dc",
-    "updated_at_iso": "2026-11-03T18:50:06.960497+00:00",
-    "updated_at_unix": 1793731806.960497
+    "state_hash": "69a486f9d7c4bccfd6e5405d4e941afc4e0d57d3baf7c885fb17ee4861096d09",
+    "updated_at_iso": "2026-11-06T13:33:10.092924+00:00",
+    "updated_at_unix": 1793971990.0929239
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -156,7 +156,7 @@
       "gpt-6-luna": "gemini-3.1-flash-lite",
       "gpt-6.1-sol": "gemini-2.5-flash"
     },
-    "last_updated": "2026-11-03 16:55:05",
+    "last_updated": "2026-11-05 20:07:50",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5-5",
       "gpt-4.1-mini": "claude-haiku-5-5",
@@ -193,18 +193,18 @@
     "ant_cost_usd": 2.813750450000001,
     "ant_input": 242459,
     "ant_output": 12283,
-    "commands": 18,
+    "commands": 19,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 162780,
+    "oai_cache_write": 171241,
     "oai_cached": 37633,
-    "oai_cost_usd": 0.54579238,
-    "oai_input": 563633,
-    "oai_output": 8575,
-    "oai_reasoning": 1076,
-    "text_translations": 330,
-    "tokens_completion": 26031,
-    "tokens_prompt": 4798404,
+    "oai_cost_usd": 0.547118005,
+    "oai_input": 573219,
+    "oai_output": 8886,
+    "oai_reasoning": 1212,
+    "text_translations": 332,
+    "tokens_completion": 26342,
+    "tokens_prompt": 4807990,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -437,13 +437,13 @@
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "cache_read": 19056,
-      "cache_write": 98768,
-      "cost_usd": 2.1177976500000004,
+      "cache_write": 107229,
+      "cost_usd": 2.1191232750000006,
       "model": "gpt-6-luna",
       "provider": "openai",
-      "reasoning": 920,
-      "tokens_completion": 11376,
-      "tokens_prompt": 2144601
+      "reasoning": 1056,
+      "tokens_completion": 11687,
+      "tokens_prompt": 2154187
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -3297,7 +3297,7 @@
     "U9a70db5b38f2b61dd0473cfff4c84b68": "https://sprofile.line-scdn.net/0hStdSn5TpDFtJKiHCxNNyJDl6DzFqW1VJYExAby94WmkjSBkMMEkUanouAG98GRsLZBsWPnspWj5FOXs9V3zwb04aUWp1Ek4EYk9Evg",
     "Ua29c1bea13a5a3b288d0eeed13d90049": "https://sprofile.line-scdn.net/0hP4lfdP5lDxtBHx-vsdVxZDFPDHFiblYJOHlFKnxNUH8oLkofanBEf3xLA34vKxwdPnAXKnQZUn5NDHh9X0nzL0YvUip9J01EanpH_g",
     "Uacd199ee8dc09268d0bab80702ebb2ac": "https://sprofile.line-scdn.net/0hAiOWEgTCHkZiLjfqaTlgORJ-HSxBX0dUR0sGIVYuSXRYSw0XHU1XIFMuRHMKSQ5CTkxRKVV8RyRuPWkgfHjicmUeQ3deFlwZSUtWow",
-    "Uaf4dc8fc636bc8f6060521c398514dc1": "https://sprofile.line-scdn.net/0hFwb7YPqQGVhPTgUwsG5nZj8eGjJsP0BKYXsCaihNRGAnKg4IZCBUOn1KRG5xf1lbYC9TbS8eFGttPQRRCk4tPDgaLgkOGVoSZlYlVnsFJggCCwlKOFEkYDsJIQwPfTlSN1MUbCAuHhMEDQwMME4tPwE3HmE6HwB3Ixl1Dkp8d9sgTG4NYileO3NJRG_x",
+    "Uaf4dc8fc636bc8f6060521c398514dc1": "https://sprofile.line-scdn.net/0hFwb7KGxaGVhPTgXSRWJnZj8eGjJsP0BKYXsCaihNRGAnKg4IZCBUOn1KRG5xf1lbYC9TbS8eFGttPQRRCk4tPDgaLgkOGVoSZlYlVnsFJggCCwlKOFEkYDsJIQwPfTlSN1MUbCAuHhMEDQwMME4tPwE3HmE6HwB3Ixl1Dkp8d9sgTG4NYileO3NJRG_x",
     "Ub4f75efd0e7288220ed7e98eda4fb9e4": "https://sprofile.line-scdn.net/0hiUGHwBwwNnpqMSNrr39IBRphNRBJQG9oQ1Z_G1ZmPE9WAXQlFldxGAxkYR4EUnckE154Hwg1OE5mIkEcdGfKTm0Ba0tWCXQlQVR-nw",
     "Ucbc2c71e01fb7b1fc12b756eed45c042": "https://sprofile.line-scdn.net/0hIOhM9VhOFmBFNAi-3MNoXjVkFQpmRU9yYVAOA3IzGgJ8UFdmPAcOVnMzTwB-DVM_PFAJVnE0TVhnAFB3FBEuBTs3ECl8fw9QDhAFVDtNMAorZilCNVAQUClnDxBkegtGN04BXRsyNjMaYwQ2aRJYQAZxA1IEAAdvFWN6NkAGeOMqNmE1aFNRA3kzS1f7",
     "Uce34fd415b4014d6f0576ca3fcd3c266": "https://sprofile.line-scdn.net/0hrBT3zNdgLW15SgQUkrNTEgkaLgdaO3R_AX43DEoZdVoTLm9oAnsyDUlCeg4TemNuVH4xDEwYdl51WVoLZxzRWX56cFxFcm8yUi9liA",
