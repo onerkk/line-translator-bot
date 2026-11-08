@@ -35,6 +35,43 @@
      "berubah bentuk akibat tekanan"
     ]
    }
+  },
+  {
+   "id": "unload-cart-for-peeling",
+   "src": "zh",
+   "tgt": "id",
+   "source": "削皮要台車，G8/G9再幫忙卸料",
+   "observed": "Stasiun packing peeling membutuhkan troli. Tolong bantu bongkar material untuk G8/G9.",
+   "corrected": "Stasiun packing peeling membutuhkan troli. G8/G9 tolong bantu turunkan material dari troli supaya trolinya bisa dipakai di peeling.",
+   "category": "other",
+   "reason": "老闆確認：削皮站要用台車，所以請 G8/G9 把台車上的料卸下來、空車給削皮。原譯 bongkar material untuk G8/G9（幫 G8/G9 卸料）主詞與目的都錯。",
+   "rule": {
+    "when": [
+     [
+      "卸料",
+      "卸下來",
+      "卸車",
+      "卸一下"
+     ],
+     [
+      "台車",
+      "推車",
+      "車子",
+      "板車"
+     ]
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "「X要台車，Y再幫忙卸料」＝Y 把台車上的料卸下、空車給 X",
+    "context": [
+     "「某站要台車，某機台／某人再幫忙卸料」是請後者把台車上的料卸下來，讓台車空出來給前者用：",
+     "譯 Y tolong turunkan material dari troli supaya trolinya bisa dipakai di X；Y 是做事的人，不是受益者，不要寫 bongkar material untuk Y。"
+    ],
+    "forbidden": [
+     "bongkar material untuk"
+    ]
+   }
   }
  ]
 }

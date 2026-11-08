@@ -527,3 +527,9 @@ def test_pinch_point_safety_rule_reaches_new_reminders():
     import factory_knowledge
     cards = factory_knowledge.get_store().retrieve("吊料時手不要放在會被擠壓的地方，小心夾傷", "zh", "id", limit=6)
     assert any(c["id"].endswith("pinch-point-hands") for c in cards)
+
+
+def test_unload_cart_rule_reaches_same_pattern():
+    import factory_knowledge
+    cards = factory_knowledge.get_store().retrieve("圓棒要推車，G3再幫忙卸一下料", "zh", "id", limit=6)
+    assert any(c["id"].endswith("unload-cart-for-peeling") for c in cards)
