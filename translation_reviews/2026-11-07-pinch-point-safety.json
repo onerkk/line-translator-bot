@@ -1,0 +1,40 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-07-pinch-point-safety",
+ "source": "screenshot review by Claude, 研磨C班 11/5 22:27",
+ "items": [
+  {
+   "id": "pinch-point-hands",
+   "src": "zh",
+   "tgt": "id",
+   "source": "削皮前幾天又發生吊運時手指夾傷送醫，作業時自己要有風險意識，手不要放在會擠壓形變的位置",
+   "observed": "Beberapa hari lalu, di Stasiun packing peeling kembali terjadi kecelakaan saat material diangkat dengan crane. Jari terjepit dan korban harus dibawa ke rumah sakit. Saat bekerja, kalian harus selalu sadar akan risiko. Jangan letakkan tangan di posisi yang bisa terjepit atau berubah bentuk akibat tekanan.",
+   "corrected": "Beberapa hari lalu, di Stasiun packing peeling kembali terjadi kecelakaan saat material diangkat dengan crane: jari terjepit dan korban harus dibawa ke rumah sakit. Saat bekerja, kalian harus selalu sadar akan risiko. Jangan letakkan tangan di titik jepit, yaitu tempat yang bisa terjepit atau tertekan saat beban bergeser.",
+   "category": "other",
+   "reason": "「手不要放在會擠壓形變的位置」是叫大家手不要放在夾點（會被擠壓的地方）；原譯 bisa terjepit atau berubah bentuk akibat tekanan 讀起來像「手會變形」，安全提醒不夠清楚。",
+   "rule": {
+    "when": [
+     [
+      "擠壓",
+      "夾傷",
+      "夾到",
+      "夾手",
+      "捲入",
+      "形變"
+     ]
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "夾點安全提醒譯成 titik jepit",
+    "context": [
+     "「會擠壓形變的位置／夾點／容易夾到的地方」是安全用語 titik jepit（tempat yang bisa terjepit atau tertekan）；",
+     "說明的是位置危險，不是「手會變形」，不要寫 berubah bentuk akibat tekanan。安全提醒保持簡短直接的命令語氣。"
+    ],
+    "forbidden": [
+     "berubah bentuk akibat tekanan"
+    ]
+   }
+  }
+ ]
+}

@@ -521,3 +521,9 @@ def test_material_condition_reports_get_the_fluency_rule():
     assert hit("Batang ini bengkok dan ada goresan")
     assert hit("Barang sebagian hitam tidak bulat")
     assert not hit("Terima kasih ya")
+
+
+def test_pinch_point_safety_rule_reaches_new_reminders():
+    import factory_knowledge
+    cards = factory_knowledge.get_store().retrieve("吊料時手不要放在會被擠壓的地方，小心夾傷", "zh", "id", limit=6)
+    assert any(c["id"].endswith("pinch-point-hands") for c in cards)
