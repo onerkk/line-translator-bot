@@ -323,3 +323,8 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
 - 正確：「下次要八點前主動告知…未告知未出勤會讓主管對你印象不好」（pukul 08.00 時刻寫法正確）。
 - 已修：「現況到站有六噸多」原譯 akan tiba（將到）時態錯 → sudah ada … di stasiun；「異型那邊還會大量出」被自行套成包裝站產出 → 異型棒那邊還會出料。
   規則：「到站有 N／料到了」＝已在站上；原文寫「會到／等等到／快到」時不套用。
+
+## 2026-11-09 研磨C班 14:15（bundle `2026-11-09-customer-shipment-pick`）
+- 已修：「大成抓出貨了，儲區異動幫忙注意一下」原譯把客戶大成當成動手拿貨的人 → Barang 大成 sudah mulai diambil untuk pengiriman；
+  規則套用到「客戶名＋抓出貨／出貨了」。
+- 待確認：「Saya tidak dapat melaporkan ke OKGO」的 OKGO 是什麼（原譯「無法向 OKGO 回報」）。

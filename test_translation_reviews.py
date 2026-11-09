@@ -543,3 +543,9 @@ def test_arrived_at_station_rule_and_its_future_exclusion():
     assert hit("圓棒現況到站有三噸，先包圓棒")
     assert not hit("料等等會到站，先準備")          # genuinely future: rule stays off
     assert not hit("急單再幫忙注意一下，有到站優先包")   # conditional "if it has arrived", not a stock report
+
+
+def test_customer_shipment_pick_rule_reaches_other_customers():
+    import factory_knowledge
+    cards = factory_knowledge.get_store().retrieve("SAMWON抓出貨了，儲區有變動", "zh", "id", limit=6)
+    assert any(c["id"].endswith("customer-goods-picked") for c in cards)

@@ -1,0 +1,35 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-09-customer-shipment-pick",
+ "source": "screenshot review by Claude, 研磨C班 14:15",
+ "items": [
+  {
+   "id": "customer-goods-picked",
+   "src": "zh",
+   "tgt": "id",
+   "source": "@All 大成抓出貨了，儲區異動幫忙注意一下",
+   "observed": "@All 大成 sudah mulai mengambil barang untuk pengiriman. Mohon perhatikan perubahan area penyimpanan.",
+   "corrected": "@All Barang 大成 sudah mulai diambil untuk pengiriman. Mohon perhatikan perubahan area penyimpanan.",
+   "category": "other",
+   "reason": "「大成抓出貨了」是大成這個客戶的貨開始被抓去出貨（大成是客戶名），原譯寫成「大成開始拿貨」，把客戶當成動手的人。",
+   "rule": {
+    "when": [
+     [
+      "抓出貨",
+      "抓貨",
+      "開始出貨",
+      "出貨了"
+     ]
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "「客戶名＋抓出貨了」＝那個客戶的貨被抓去出貨",
+    "context": [
+     "「大成抓出貨了／某客戶在出貨」的客戶名是貨的主人，不是動手的人：譯 barang <客戶名> sudah mulai diambil untuk pengiriman；",
+     "不要寫成 <客戶名> mengambil barang（客戶自己來拿）。客戶名照原文保留。"
+    ]
+   }
+  }
+ ]
+}
