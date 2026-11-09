@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.50.0-claude-5-5-gpt-6-prompt-cache-root-fix-2026-10-20",
     "schema_version": 8,
-    "state_hash": "21cb8f288a24b44deffab36abb3e4347f728d826e6b429529456e24fad248e0e",
-    "updated_at_iso": "2026-11-09T09:58:02.906677+00:00",
-    "updated_at_unix": 1794218282.906677
+    "state_hash": "d567a9331c8553ed1ff1410e84c4b5fbdc2e8a429032226572e4bff4fc3f28b6",
+    "updated_at_iso": "2026-11-09T09:58:58.484291+00:00",
+    "updated_at_unix": 1794218338.4842913
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -1802,6 +1802,22 @@
         "enabled": true,
         "items": [
           {
+            "action": "phrases",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_phrases",
+            "label": "⚡ 常用句/Kalimat",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
             "action": "natural",
             "clipboard_text": "",
             "cmd_check": "",
@@ -1873,7 +1889,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_personal",
             "label": "👤 我的語言/Bahasa",
             "link_key": "",
@@ -1953,7 +1969,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_factory_ack",
             "label": "✅ 了解/Paham",
             "link_key": "",
@@ -1969,7 +1985,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_factory_receipts",
             "label": "📋 確認/Status",
             "link_key": "",
@@ -1984,7 +2000,7 @@
             "contexts": [
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_overlay",
             "label": "🖼 圖文對照/Gambar",
             "link_key": "",
@@ -2064,7 +2080,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "qry",
             "label": "🔍 儲區/Gudang",
             "link_key": "",
@@ -2096,7 +2112,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "skip",
             "label": "❌ 不翻我/Lewati",
             "link_key": "",
@@ -2112,7 +2128,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "unskip",
             "label": "✅ 翻譯我/Terjemah",
             "link_key": "",
@@ -2160,7 +2176,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "pkg",
             "label": "📦 包裝碼/Kemas",
             "link_key": "",
@@ -2176,7 +2192,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "scrap",
             "label": "🎨 廢料色/Warna",
             "link_key": "",
@@ -2256,7 +2272,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "link_saran",
             "label": "💡 提案/Saran",
             "link_key": "saran",
@@ -2272,7 +2288,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "link_absen",
             "label": "📅 差勤/Absen",
             "link_key": "absen",
