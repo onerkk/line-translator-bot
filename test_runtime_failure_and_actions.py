@@ -5,6 +5,17 @@ import ai_provider
 import app
 import translation_quality_gate as tqg
 
+import pytest as _pytest_phrases
+
+
+@_pytest_phrases.fixture(autouse=True)
+def _without_phrases_shortcut(monkeypatch):
+    """These tests pin the admin-saved menu order; the personal 常用句 button
+    (covered in test_phrase_stats.py) is switched off here."""
+    import app as _app
+    monkeypatch.setattr(_app, "LIFF_PHRASES_ID", "")
+
+
 
 def test_lowercase_line_display_name_is_not_language_leakage():
     source = (

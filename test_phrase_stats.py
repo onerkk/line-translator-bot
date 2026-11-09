@@ -74,3 +74,60 @@ def test_group_messages_feed_the_per_person_ranking(monkeypatch):
     except Exception:
         pass
     assert any(t == "收到" for _g, _u, t in recorded)
+
+
+def test_shortcut_button_and_group_token_roundtrip(monkeypatch):
+    import app
+    monkeypatch.setitem(app.group_settings, "Cgroup1", True)
+    action = app._phrases_shortcut_action("Cgroup1")
+    assert action["type"] == "uri" and action["uri"].startswith("https://liff.line.me/2009810040-hthJ46K7?g=")
+    assert len(action["label"]) <= 20 and "Cgroup1" not in action["uri"]
+    token = action["uri"].split("g=", 1)[1]
+    assert app._phrases_group_from_token(token) == "Cgroup1"
+    assert app._phrases_group_from_token("forged") == ""
+    qr = app.build_quick_reply("Cgroup1")
+    labels = [item.action.label for item in qr.items]
+    assert labels[0] == "⚡ 常用句/Kalimat" and len(labels) <= 13
+
+
+def test_panel_api_returns_only_the_callers_own_phrases(monkeypatch):
+    import app
+    ps._MEMORY.clear()
+    monkeypatch.setattr(app, "_kv_enabled", lambda: False)
+    monkeypatch.setitem(app.group_settings, "Cgroup1", True)
+    for _ in range(3):
+        ps.record("Cgroup1", "Uaaa", "收到")
+        ps.record("Cgroup1", "Ubbb", "Siap")
+    token = app._phrases_shortcut_action("Cgroup1")["uri"].split("g=", 1)[1]
+    client = app.app.test_client()
+    monkeypatch.setattr(app, "_phrases_user_from_access_token", lambda t: "Uaaa" if t == "tok-a" else "")
+    r = client.post("/api/liff/phrases", json={"g": token, "access_token": "tok-a"})
+    assert r.status_code == 200 and r.get_json()["phrases"] == ["收到"]
+    assert client.post("/api/liff/phrases", json={"g": token, "access_token": "bad"}).status_code == 401
+    assert client.post("/api/liff/phrases", json={"g": "x", "access_token": "tok-a"}).status_code == 400
+    page = client.get("/liff/phrases").get_data(as_text=True)
+    assert '"2009810040-hthJ46K7"' in page and "liff.sendMessages" in page
+
+
+def test_access_token_from_another_channel_is_rejected(monkeypatch):
+    import app
+    import requests
+    class R:
+        def __init__(self, code, data):
+            self.status_code, self._d = code, data
+        def json(self):
+            return self._d
+    calls = []
+    def fake_get(url, **kw):
+        calls.append(url)
+        if "verify" in url:
+            return R(200, {"client_id": "999", "expires_in": 100})
+        return R(200, {"userId": "Uaaa"})
+    monkeypatch.setattr(requests, "get", fake_get)
+    assert app._phrases_user_from_access_token("t") == ""
+    def fake_ok(url, **kw):
+        if "verify" in url:
+            return R(200, {"client_id": "2009810040", "expires_in": 100})
+        return R(200, {"userId": "Uaaa"})
+    monkeypatch.setattr(requests, "get", fake_ok)
+    assert app._phrases_user_from_access_token("t") == "Uaaa"

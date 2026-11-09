@@ -24110,6 +24110,131 @@ def build_translation_flex(original, translated, src_flag, tgt_flag, sender_name
         return None
 
 
+# ─── 個人常用句面板（LIFF）──────────────────────────────
+# One shared quick-reply button per group; the LIFF panel it opens shows the
+# person who tapped it their own most-used replies in that group and sends the
+# chosen one as them (liff.sendMessages), so the bot translates it as usual.
+LIFF_PHRASES_ID = os.environ.get("LIFF_PHRASES_ID", "2009810040-hthJ46K7").strip()
+LIFF_LOGIN_CHANNEL_ID = LIFF_PHRASES_ID.split("-", 1)[0] if LIFF_PHRASES_ID else ""
+
+
+def _phrases_secret():
+    return (LINE_SECRET or os.environ.get("ADMIN_KEY", "") or "phrases-shortcut").strip()
+
+
+def _phrases_shortcut_action(group_id):
+    if not LIFF_PHRASES_ID or not group_id:
+        return None
+    token = phrase_stats_module.group_token(group_id, _phrases_secret())
+    return {"type": "uri", "label": "⚡ 常用句/Kalimat",
+            "uri": f"https://liff.line.me/{LIFF_PHRASES_ID}?g={token}"}
+
+
+def _phrases_group_from_token(token):
+    if not token:
+        return ""
+    secret = _phrases_secret()
+    candidates = set()
+    for source in (group_settings, group_user_names, group_target_lang):
+        try:
+            candidates.update(k for k in source.keys() if isinstance(k, str))
+        except Exception:
+            pass
+    for gid in candidates:
+        if hmac.compare_digest(phrase_stats_module.group_token(gid, secret), str(token)):
+            return gid
+    return ""
+
+
+def _phrases_user_from_access_token(access_token):
+    """Verify a LIFF access token with LINE and return the user id.
+
+    The token must have been issued for our LINE Login channel; the profile
+    call then tells us who opened the panel (never trusted from the browser).
+    """
+    import requests as _rq
+    if not access_token:
+        return ""
+    verify = _rq.get("https://api.line.me/oauth2/v2.1/verify",
+                     params={"access_token": access_token}, timeout=8)
+    if verify.status_code != 200:
+        return ""
+    info = verify.json() or {}
+    if LIFF_LOGIN_CHANNEL_ID and str(info.get("client_id")) != LIFF_LOGIN_CHANNEL_ID:
+        return ""
+    if int(info.get("expires_in") or 0) <= 0:
+        return ""
+    profile = _rq.get("https://api.line.me/v2/profile",
+                      headers={"Authorization": f"Bearer {access_token}"}, timeout=8)
+    if profile.status_code != 200:
+        return ""
+    return str((profile.json() or {}).get("userId") or "")
+
+
+PHRASES_LIFF_HTML = r"""<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>常用句 / Kalimat</title>
+<script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<style>
+body{margin:0;font-family:-apple-system,"Segoe UI",Roboto,"Noto Sans TC",sans-serif;background:#fff7f2;color:#4a2f27}
+h1{font-size:18px;margin:16px 16px 4px}p.sub{margin:0 16px 12px;color:#9a7a6e;font-size:13px}
+#list{padding:0 12px 24px}button.p{display:block;width:100%;margin:8px 0;padding:16px;border:0;border-radius:14px;
+background:#ffffff;box-shadow:0 1px 4px rgba(0,0,0,.12);font-size:18px;text-align:left;color:#4a2f27}
+button.p:active{background:#ffe3d6}.msg{padding:24px 16px;color:#9a7a6e;font-size:15px;line-height:1.6}
+</style></head><body>
+<h1>⚡ 常用句 / Kalimat</h1><p class="sub">點一下就用你的名義送出 · Ketuk untuk kirim atas nama kamu</p>
+<div id="list"><div class="msg">載入中… / Memuat…</div></div>
+<script>
+const LIFF_ID = __LIFF_ID__;
+const list = document.getElementById('list');
+function show(html){ list.innerHTML = html; }
+async function main(){
+  await liff.init({liffId: LIFF_ID});
+  if (!liff.isInClient()) { show('<div class="msg">請在 LINE 群組裡點底部的「⚡ 常用句」打開。<br>Buka dari tombol "⚡ Kalimat" di grup LINE.</div>'); return; }
+  const g = new URLSearchParams(location.search).get('g') || '';
+  const r = await fetch('/api/liff/phrases', {method:'POST', headers:{'Content-Type':'application/json'},
+                         body: JSON.stringify({g: g, access_token: liff.getAccessToken()})});
+  const d = await r.json();
+  if (!d.ok) { show('<div class="msg">無法讀取，請稍後再試。<br>Gagal memuat, coba lagi nanti.</div>'); return; }
+  if (!d.phrases.length) { show('<div class="msg">你在這個群組還沒有常用句。同一句講過兩次以上，就會出現在這裡。<br>Belum ada kalimat. Kalimat yang kamu kirim 2 kali atau lebih akan muncul di sini.</div>'); return; }
+  list.innerHTML = '';
+  d.phrases.forEach(t => {
+    const b = document.createElement('button'); b.className = 'p'; b.textContent = t;
+    b.onclick = async () => {
+      b.disabled = true;
+      try { await liff.sendMessages([{type:'text', text: t}]); liff.closeWindow(); }
+      catch (e) { b.disabled = false; alert('送出失敗 / Gagal kirim: ' + (e.message || e)); }
+    };
+    list.appendChild(b);
+  });
+}
+main().catch(e => show('<div class="msg">發生錯誤 / Error: ' + (e.message || e) + '</div>'));
+</script></body></html>"""
+
+
+@app.route("/liff/phrases", methods=["GET"])
+def liff_phrases_page():
+    return PHRASES_LIFF_HTML.replace("__LIFF_ID__", json.dumps(LIFF_PHRASES_ID)), 200, {
+        "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}
+
+
+@app.route("/api/liff/phrases", methods=["POST"])
+def liff_phrases_api():
+    body = request.get_json(silent=True) or {}
+    group_id = _phrases_group_from_token(str(body.get("g") or ""))
+    if not group_id:
+        return jsonify({"ok": False, "error": "unknown_group"}), 400
+    try:
+        user_id = _phrases_user_from_access_token(str(body.get("access_token") or ""))
+    except Exception:
+        user_id = ""
+    if not user_id:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    phrases = phrase_stats_module.top(group_id, user_id, n=4,
+                                      kv=_kv_command if _kv_enabled() else None)
+    return jsonify({"ok": True, "phrases": phrases})
+
+
 def build_quick_reply(group_id=None):
     """All generic buttons use the same group menu as translation replies."""
     return quick_reply_menu.build(group_id or "")

@@ -23,6 +23,7 @@ BUILD_ID = "2026-09-09.ci116-matched-ack"
 NOTICE_ACTIONS = {"factory_ack", "factory_help", "factory_receipts"}
 WORK = re.compile(r"PMI|檢[驗測查]|检[验测查]|生產|生产|產量|设备|設備|班[別次]|交[接班]|入[庫帐帳]|出[貨库庫]|包裝|包装|秤[重料]|標[籤签]|工[單单]|\b(?:produksi|periksa|pemeriksaan|shift|mesin|timbang|gudang|label)\b", re.I)
 BUILTINS = {
+    "phrases": "⚡ 常用句/Kalimat",
     "natural": "✨ 自然/Alami", "literal": "🔎 直譯/Harfiah",
     "formal": "📢 正式/Formal", "backcheck": "↩ 回譯/Cek balik",
     "personal": "👤 我的語言/Bahasa", "handover": "📋 交班摘要/Serah",
@@ -167,7 +168,16 @@ class Menu:
         if not isinstance(saved, dict) or saved.get("schema") != SCHEMA:
             return self._legacy_profile(group or "")
         saved = self.document()
-        return saved.get("groups", {}).get(group) or saved["default"]
+        profile = saved.get("groups", {}).get(group) or saved["default"]
+        if self.h.get("LIFF_PHRASES_ID") and not any(
+                r.get("type") == "builtin" and r.get("action") == "phrases" for r in profile.get("items", [])):
+            # New built-in added after this menu was saved: show it first until
+            # an admin saves the menu again (then their choice is kept).
+            profile = copy.deepcopy(profile)
+            profile["items"].insert(0, {"id": "builtin_phrases", "type": "builtin", "action": "phrases",
+                                        "label": short(BUILTINS["phrases"]), "enabled": True,
+                                        "contexts": ["text", "image"]})
+        return profile
 
     def version(self):
         return hashlib.sha256(json.dumps(self.document(), sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:24]
@@ -239,6 +249,13 @@ class Menu:
                     if name in NOTICE_ACTIONS and profile["acknowledgements"] == "off":
                         continue
                     action = {"type": "postback", "label": label, "data": "preview=" + name}
+                elif name == "phrases":
+                    # Personal 常用句 panel (LIFF): needs no translation token.
+                    make = self.h.get("_phrases_shortcut_action")
+                    built = make(group) if callable(make) else None
+                    if not built:
+                        continue
+                    action = dict(built, label=label)
                 elif name in {"handover", "interpreter"}:
                     data = {"action": "handover_summary" if name == "handover" else "open_interpreter"}
                     if token:
