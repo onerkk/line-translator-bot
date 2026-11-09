@@ -4272,12 +4272,21 @@ def _active_translation_corrections_for_casebook(group_id=None):
             group_id = str(getattr(_tl, "group_id", "") or "")
         except Exception:
             group_id = ""
-    return translation_casebook_module.active_corrections_snapshot(
+    rows = translation_casebook_module.active_corrections_snapshot(
         al_module,
         ttl_seconds=60,
         limit=2000,
         group_id=group_id,
     )
+    _hide = getattr(_tl, "eval_hide_source", None)
+    if _hide:
+        # Learning evaluation (learning_eval_live): "*" hides every learned
+        # correction, otherwise only the one for the sentence being examined.
+        if _hide == "*":
+            return []
+        _norm = lambda v: re.sub(r"\s+", " ", str(v or "")).strip()
+        rows = [r for r in rows if _norm(r.get("src_text") or r.get("source")) != _norm(_hide)]
+    return rows
 
 
 def _scoped_translation_casebook_inputs(group_id=None):
@@ -11878,6 +11887,8 @@ def _context_translation_request_key(text, src, tgt):
 
 def _translate_with_context_reuse(key, text, src, tgt):
     # Same-key waiters use the owner's admitted result; other work stays parallel.
+    if getattr(_tl, "eval_no_cache", False):
+        return _translate_core(text, src, tgt)      # learning evaluation: never reuse a result
     with serialize_request(key):
         result = get_context_result(key)
         if result is not None:
@@ -11979,6 +11990,8 @@ def _translation_cache_persistent_fingerprint():
 
 def cache_get(text, src, tgt):
     """Return a fresh cache row after current-policy revalidation."""
+    if getattr(_tl, "eval_no_cache", False):
+        return None
     if _translation_cache_context_bound(text):
         return None
 
@@ -12059,6 +12072,8 @@ def cache_get(text, src, tgt):
 
 def cache_set(text, src, tgt, result, force=False):
     """Store a translation only after synchronous current-policy verification."""
+    if getattr(_tl, "eval_no_cache", False):
+        return
     if getattr(_tl, "translation_alignment_issues", None):
         logger.debug("[SourceAlignment] refused unverified structured cache write")
         return
@@ -15378,7 +15393,8 @@ def _translate_core(text, src, tgt):
     # spend a second SQLite query merely to discard its result.
     if not (_factory_ctx or _quality_critical):
         try:
-            _tm_result = tm_module.tm_lookup(text, src, tgt, _gid_for_tm)
+            _tm_result = (None if getattr(_tl, "eval_no_cache", False)
+                          else tm_module.tm_lookup(text, src, tgt, _gid_for_tm))
             if _tm_result:
                 if _is_translation_failure_sentinel(_tm_result.get("tgt_text", "")):
                     logger.warning("[LegacyFailurePurge] ignored failure payload from lexical TM")
@@ -15436,8 +15452,8 @@ def _translate_core(text, src, tgt):
         semantic_contract=_semantic_contract,
     ):
         try:
-            _vec_future = _VEC_LOOKUP_EXECUTOR.submit(
-                vec_tm_module.vector_lookup, text, src, tgt, _gid_for_tm)
+            _vec_future = (None if getattr(_tl, "eval_no_cache", False) else _VEC_LOOKUP_EXECUTOR.submit(
+                vec_tm_module.vector_lookup, text, src, tgt, _gid_for_tm))
         except Exception as _vec_submit_e:
             logger.debug("[VecTM] submit skipped: %s", _vec_submit_e)
             _vec_future = None
@@ -16076,7 +16092,8 @@ def _translate_core(text, src, tgt):
         _quality_cacheable = False
 
     # ─── 背景後處理:本地品質訊號 → TM store → 向量 store（0 次翻譯 API） ───
-    if result and isinstance(result, str) and not result.startswith("⚠") and _quality_cacheable:
+    if (result and isinstance(result, str) and not result.startswith("⚠") and _quality_cacheable
+            and not getattr(_tl, "eval_no_cache", False)):   # evaluation output never enters translation memory
         try:
             _BG_POST_EXECUTOR.submit(
                 _post_translation_async,
@@ -16385,6 +16402,52 @@ def _latency_report(group_id=None, hours=24):
         ms = [r["ms"] for r in rows if sel(r)]
         out[name] = {"n": len(ms), "p50": pct(ms, .5), "p90": pct(ms, .9), "max": max(ms) if ms else 0}
     return out
+
+
+# Learning evaluation: review rule cards can be hidden for the evaluating thread
+# only (see learning_eval_live); every other thread retrieves normally.
+_fk_retrieve_unfiltered = _FACTORY_KNOWLEDGE_STORE.retrieve
+
+
+def _fk_retrieve_eval_aware(text, src, tgt, limit=3):
+    hide = getattr(_tl, "eval_hide_cards", None)
+    if not hide:
+        return _fk_retrieve_unfiltered(text, src, tgt, limit)
+    cards = _fk_retrieve_unfiltered(text, src, tgt, limit + 8)
+    kept = [c for c in cards if not (str(c.get("id", "")).startswith("review_")
+                                     and (hide == "all" or str(c.get("id", "")).endswith("_" + hide)))]
+    return kept[:limit]
+
+
+_FACTORY_KNOWLEDGE_STORE.retrieve = _fk_retrieve_eval_aware
+_LEARNING_EVAL_STATE = {"running": False, "last": None}
+
+
+def _run_learning_eval_and_push(group_id, limit=10):
+    """Background job for /評測: evaluate, then push the summary to the group."""
+    import learning_eval_live
+    try:
+        import sys as _sys_eval
+        report = learning_eval_live.run(_sys_eval.modules[__name__], limit=limit)
+        _LEARNING_EVAL_STATE["last"] = report
+        text = learning_eval_live.summary_text(report, os.environ.get("RENDER_GIT_COMMIT", "")[:7])
+        try:
+            _event_log_write("learning_eval", {k: report.get(k) for k in
+                             ("cases", "scored", "untrained", "generalised", "same")} |
+                             {"better": len(report.get("better", [])), "worse": len(report.get("worse", []))})
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.exception("[LearningEval] failed")
+        text = f"📊 學習評測失敗：{type(exc).__name__}"
+    finally:
+        _LEARNING_EVAL_STATE["running"] = False
+    try:
+        with ApiClient(configuration) as api_client:
+            MessagingApi(api_client).push_message(PushMessageRequest(
+                to=group_id, messages=[TextMessage(text=_clip_line_text(text))]))
+    except Exception:
+        logger.exception("[LearningEval] push failed")
 
 
 import atexit as _atexit_phrases
@@ -20425,6 +20488,19 @@ def handle_message(event):
     if group_id and not is_dm:
         # 1. 打「設定」「語言」直接開設定面板(參考 JFETEK 面板 / Ligo 指令的痛點:
         #    工人記不住指令,給一個最自然的中文入口)
+        if text.strip() in ("/評測", "/评测", "/eval") and is_group_admin(getattr(source, "user_id", None)):
+            # Measures whether teaching transfers to sentences never corrected
+            # (about 40 calls to the cheapest model; runs in the background).
+            if _LEARNING_EVAL_STATE["running"]:
+                _msg = "📊 評測進行中，完成後會把結果傳到這個群組。"
+            else:
+                _LEARNING_EVAL_STATE["running"] = True
+                threading.Thread(target=_run_learning_eval_and_push, args=(group_id,), daemon=True).start()
+                _msg = "📊 開始評測（抽 10 句，約 1～2 分鐘），完成後會把結果傳到這個群組。"
+            with ApiClient(configuration) as api_client:
+                MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token, messages=[TextMessage(text=_msg)]))
+            return
         if text.strip() in ("/速度", "/speed") and is_group_admin(getattr(source, "user_id", None)):
             # Measured translation speed for this group (since the last restart, up to 24 h).
             _rep = _latency_report(group_id)
