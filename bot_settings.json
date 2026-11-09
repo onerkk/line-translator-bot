@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.50.0-claude-5-5-gpt-6-prompt-cache-root-fix-2026-10-20",
     "schema_version": 8,
-    "state_hash": "69a486f9d7c4bccfd6e5405d4e941afc4e0d57d3baf7c885fb17ee4861096d09",
-    "updated_at_iso": "2026-11-06T13:33:10.092924+00:00",
-    "updated_at_unix": 1793971990.0929239
+    "state_hash": "1127ccb665e73c709ed4b785c8e03d59d6f8067518b3716825a1a2cb3a22ba6d",
+    "updated_at_iso": "2026-11-09T09:45:20.481723+00:00",
+    "updated_at_unix": 1794217520.4817226
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -156,7 +156,7 @@
       "gpt-6-luna": "gemini-3.1-flash-lite",
       "gpt-6.1-sol": "gemini-2.5-flash"
     },
-    "last_updated": "2026-11-05 20:07:50",
+    "last_updated": "2026-11-09 09:31:16",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5-5",
       "gpt-4.1-mini": "claude-haiku-5-5",
@@ -902,7 +902,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "builtin_personal",
           "label": "👤 我的語言/Bahasa",
           "link_key": "",
@@ -982,7 +982,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "builtin_factory_ack",
           "label": "✅ 了解/Paham",
           "link_key": "",
@@ -1045,7 +1045,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "builtin_context_qry",
           "label": "📋 查此工單/Gudang",
           "link_key": "",
@@ -1125,7 +1125,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "skip",
           "label": "❌ 不翻我/Lewati",
           "link_key": "",
@@ -1141,7 +1141,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "unskip",
           "label": "✅ 翻譯我/Terjemah",
           "link_key": "",
@@ -1189,7 +1189,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "pkg",
           "label": "📦 包裝碼/Kemas",
           "link_key": "",
