@@ -568,3 +568,26 @@ def test_data_release_then_hoist_rule():
         return any(c["id"].endswith("bundle-data-released") for c in store.retrieve(text, "zh", "id", limit=6))
     assert hit("圓棒十點前會放，再幫忙吊過來包裝站")
     assert not hit("東西先放旁邊就好")
+
+
+def test_learned_rules_fire_on_their_cases_and_stay_quiet_on_ordinary_chat():
+    """Health check for the learning loop: every rule is reachable from the case
+    that taught it, and none of them leaks into everyday messages."""
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    for bundle in reviews.load_bundles():
+        for item in bundle["items"]:
+            if item.get("rule"):
+                cards = store.retrieve(item["source"], item["src"], item["tgt"], limit=8)
+                assert any(c["id"].endswith(item["id"]) for c in cards), item["id"]
+    ordinary = {
+        ("zh", "id"): ["早安", "今天辛苦了", "我等一下過去", "好的收到", "謝謝你幫忙", "這個放哪裡", "機台正常",
+                       "這捆包好了", "料還沒來", "幫我拿工單", "數量對嗎", "請注意安全", "今天加班嗎", "燈壞了",
+                       "這支量過了", "尺寸合格", "下一把是哪個"],
+        ("id", "zh"): ["Selamat pagi", "Terima kasih", "Sudah selesai", "Belum datang", "Mesin normal",
+                       "Tolong bantu sebentar", "Ukurannya sudah benar", "Barang sudah dikemas", "Siap pak",
+                       "Lembur hari ini?", "Sudah diukur", "Bundel berikutnya yang mana"],
+    }
+    leaks = [(text, c["id"]) for (src, tgt), texts in ordinary.items() for text in texts
+             for c in store.retrieve(text, src, tgt, limit=8) if c["id"].startswith("review_")]
+    assert leaks == []

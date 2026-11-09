@@ -26,30 +26,55 @@ def test_rankings_are_separate_per_group_and_per_person():
     assert ps.top("G2", "U1") == ["OK"]
 
 
-def test_kv_backend_and_trimming():
-    store = {}
+def _fake_kv():
+    store, calls = {}, []
     def kv(args):
+        calls.append(args[0])
         op, key = args[0], args[1]
         h = store.setdefault(key, {})
-        if op == "HINCRBY":
-            h[args[2]] = h.get(args[2], 0) + int(args[3]); return h[args[2]]
-        if op == "HLEN":
-            return len(h)
+        if op == "HGET":
+            return h.get(args[2])
+        if op == "HSET":
+            h[args[2]] = args[3]; return 1
         if op == "HGETALL":
             out = []
             for k, v in h.items():
                 out += [k, str(v)]
             return out
-        if op == "HDEL":
-            for k in args[2:]:
-                h.pop(k, None)
-            return 1
+    return kv, store, calls
+
+
+def test_store_writes_are_batched_to_protect_the_upstash_quota(monkeypatch):
+    ps._MEMORY.clear()
+    kv, store, calls = _fake_kv()
     for i in range(60):
-        ps.record("G", "U", f"phrase{i}", kv=kv)
+        ps.record("G", "U", f"phrase {chr(65 + i % 26)}{i}", kv=kv)
     for _ in range(5):
         ps.record("G", "U", "Sudah", kv=kv)
-    assert len(store[ps._key("G", "U")]) <= ps.KEEP_PER_USER + 10
+    # 65 chat messages cost one load (HGET + one-time migration probe), not 130 commands
+    assert calls.count("HSET") == 0 and len(calls) <= 2
     assert ps.top("G", "U", kv=kv) == ["Sudah"]
+    assert len(ps._MEMORY[("G", "U")]["counts"]) <= ps.KEEP_PER_USER + 10
+    assert ps.flush_all(kv) == 1 and calls.count("HSET") == 1
+    # a fresh process reads the saved ranking back with a single command
+    ps._MEMORY.clear(); calls.clear()
+    assert ps.top("G", "U", kv=kv) == ["Sudah"] and calls == ["HGET"]
+
+
+def test_due_flush_happens_on_the_next_message(monkeypatch):
+    ps._MEMORY.clear()
+    kv, store, calls = _fake_kv()
+    ps.record("G", "U", "收到", kv=kv)
+    ps._MEMORY[("G", "U")]["last_flush"] -= ps.FLUSH_SECONDS + 1
+    ps.record("G", "U", "收到", kv=kv)
+    assert calls.count("HSET") == 1
+
+
+def test_first_layout_is_migrated_once():
+    ps._MEMORY.clear()
+    kv, store, calls = _fake_kv()
+    store[ps._OLD_KEY_PREFIX + "G:U"] = {"收到": 3, "好": 1}
+    assert ps.top("G", "U", kv=kv) == ["收到"]
 
 
 def test_group_token_hides_group_id():

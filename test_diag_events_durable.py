@@ -183,3 +183,26 @@ def test_reviewed_notice_is_answered_from_memory_without_a_model_call(monkeypatc
     app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
     out = app.translate(NOTICE, "zh", "id")
     assert "cuti tahunan" in out and not calls
+
+
+def test_durable_diagnostics_do_not_burn_quota_on_normal_traffic(monkeypatch):
+    commands = []
+    monkeypatch.setattr(app, "_kv_enabled", lambda: True)
+    monkeypatch.setattr(app, "_kv_command", lambda args, timeout=8: commands.append(args[0]))
+    class Now:
+        def submit(self, fn, *a, **k):
+            fn(*a, **k)
+    monkeypatch.setattr(app, "_EVENT_LOG_EXECUTOR", Now())
+    monkeypatch.setattr(app, "_event_log_write_sync", lambda *a, **k: None)
+    app._DIAG_RECENT.clear(); app._DIAG_KV_STATE["writes"] = 5
+    # every translation starts and is delivered: nothing durable
+    app._event_log_write("translation_outcome", {"status": "started", "group_id": "C1"})
+    app._event_log_write("translation_outcome", {"status": "delivered", "group_id": "C1"})
+    assert commands == []
+    # a muted group's messages: one record per 10 minutes, one command each
+    for _ in range(20):
+        app._event_log_write("text_skipped", {"group_id": "C1", "reason": "group_translation_disabled"})
+    assert commands == ["LPUSH"]
+    # real failures are always kept
+    app._event_log_write("translation_outcome", {"status": "failed", "group_id": "C1"})
+    assert commands.count("LPUSH") == 2

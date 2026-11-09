@@ -1085,8 +1085,34 @@ def _diag_kv_append(event_type, data):
     entry = json.dumps({"ts": int(time.time()), "type": str(event_type), "data": _diag_compact(data)},
                        ensure_ascii=False)
     _kv_command(["LPUSH", _DIAG_KV_KEY, entry])
-    _kv_command(["LTRIM", _DIAG_KV_KEY, "0", str(_DIAG_KV_MAX - 1)])
-    _kv_command(["EXPIRE", _DIAG_KV_KEY, str(_DIAG_KV_TTL_SECONDS)])
+    # Quota: trimming and the retention timer only need to run occasionally,
+    # so a normal event costs one Upstash command instead of three.
+    _DIAG_KV_STATE["writes"] = _DIAG_KV_STATE.get("writes", 0) + 1
+    if _DIAG_KV_STATE["writes"] % 25 == 1:
+        _kv_command(["LTRIM", _DIAG_KV_KEY, "0", str(_DIAG_KV_MAX - 1)])
+        _kv_command(["EXPIRE", _DIAG_KV_KEY, str(_DIAG_KV_TTL_SECONDS)])
+
+
+_DIAG_KV_STATE = {"writes": 0}
+_DIAG_RECENT = {}
+
+
+def _diag_event_is_fresh(event_type, data):
+    """Evidence, not a firehose: in-flight "started" markers are never stored,
+    and a repeated skip reason for the same group is stored once per 10 minutes
+    (a group with translation off would otherwise cost quota on every message)."""
+    data = data if isinstance(data, dict) else {}
+    if event_type == "translation_outcome" and str(data.get("status")) in ("started", "delivered"):
+        return False
+    if event_type == "text_skipped":
+        key = (str(data.get("group_id", "")), str(data.get("reason", "")))
+        now = time.time()
+        if now - _DIAG_RECENT.get(key, 0) < 600:
+            return False
+        if len(_DIAG_RECENT) > 500:
+            _DIAG_RECENT.clear()
+        _DIAG_RECENT[key] = now
+    return True
 
 
 def _diag_kv_read(n=200):
@@ -1116,7 +1142,7 @@ def _event_log_write(event_type, data):
         _EVENT_LOG_EXECUTOR.submit(_event_log_write_sync, event_type, data)
     except Exception:
         pass
-    if _diag_event_wanted(event_type):
+    if _diag_event_wanted(event_type) and _diag_event_is_fresh(event_type, data):
         try:
             _EVENT_LOG_EXECUTOR.submit(_diag_kv_append, event_type, data)
         except Exception:
@@ -16360,6 +16386,9 @@ def _latency_report(group_id=None, hours=24):
         out[name] = {"n": len(ms), "p50": pct(ms, .5), "p90": pct(ms, .9), "max": max(ms) if ms else 0}
     return out
 
+
+import atexit as _atexit_phrases
+_atexit_phrases.register(lambda: phrase_stats_module.flush_all(_kv_command if _kv_enabled() else None))
 
 _translate_unsanitized = translate
 
