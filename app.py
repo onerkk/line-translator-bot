@@ -292,6 +292,7 @@ import translation_quality_gate as tqg_module  # synchronous provider-neutral in
 import translation_privacy as translation_privacy_module  # provider-boundary PII/name masking
 import prompt_optimizer as prompt_opt_module   # runtime prompt compiler: principles + relevant real-failure rules
 import translation_extras as translation_extras_module
+import phrase_stats as phrase_stats_module
 import expressive_assets as expressive_assets_module
 import expressive_engine as expressive_engine_module
 import factory_knowledge as factory_knowledge_module  # editable plant-context retrieval, no sentence patches
@@ -20447,6 +20448,15 @@ def handle_message(event):
         logger.info("[mention-guard] skip name-call message group=%s text=%r",
                     group_id, text[:80])
         return
+
+    # 常用句學習：每個群組、每個人分開記錄自己常講的短句（背景寫入，不影響翻譯速度）。
+    if sender_id:
+        try:
+            _EVENT_LOG_EXECUTOR.submit(
+                phrase_stats_module.record, group_id, sender_id, text,
+                _kv_command if _kv_enabled() else None)
+        except Exception:
+            pass
 
     # Cache this message for future quote references
     msg_id = getattr(event.message, 'id', None)
