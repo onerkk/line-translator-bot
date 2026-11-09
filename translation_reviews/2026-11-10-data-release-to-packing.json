@@ -1,0 +1,42 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-10-data-release-to-packing",
+ "source": "screenshot review by Claude, 研磨C班 15:59; meaning confirmed by the owner",
+ "items": [
+  {
+   "id": "bundle-data-released",
+   "src": "zh",
+   "tgt": "id",
+   "source": "@法比恩 Fabian @祥 大捆的七點半前會放，再幫忙安排過來",
+   "observed": "@法比恩 Fabian @祥 Bundel besar akan diletakkan sebelum pukul 7.30. Tolong bantu atur agar dibawa ke sini.",
+   "corrected": "@法比恩 Fabian @祥 Data bundel besar akan dimasukkan ke stasiun packing di sistem sebelum pukul 07.30. Setelah itu tolong bantu atur supaya bundelnya diangkat ke stasiun packing.",
+   "category": "other",
+   "reason": "老闆確認：「大捆的七點半前會放」是大捆棒材的資料會在七點半前放（轉）到包裝站系統，「再幫忙安排過來」是請安排把料吊運到包裝站。原譯 diletakkan（實體放置）與 dibawa ke sini 都沒表達出「先轉資料、再吊料過來」。",
+   "rule": {
+    "when": [
+     [
+      "會放",
+      "放過來",
+      "放到包裝",
+      "資料放",
+      "先放"
+     ]
+    ],
+    "regex_any": [
+     "(?:會放|放過來|先放|資料放)[^。！？!?\\n]{0,12}(?:安排過來|吊過來|吊運|移過來|包裝站)"
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "「（時間）前會放，再安排過來」＝先把資料轉到包裝站，再吊料過去",
+    "context": [
+     "包裝站語境的「…會放／先放」常指把那批料的資料在系統放（轉）到包裝站（data dimasukkan/dipindahkan ke stasiun packing di sistem），不是把料實體放下；",
+     "後面的「再幫忙安排過來／吊過來」才是請人把料吊運到包裝站（bundelnya diangkat ke stasiun packing）。兩個步驟都要譯出來。"
+    ],
+    "forbidden": [
+     "akan diletakkan sebelum"
+    ]
+   }
+  }
+ ]
+}

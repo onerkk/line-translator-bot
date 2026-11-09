@@ -559,3 +559,12 @@ def test_okgo_rule_both_directions():
     assert hit("ID ini belum bisa OKGO", "id", "zh")
     assert hit("這支做完記得按OKGO", "zh", "id")
     assert not hit("ok gogo semangat", "id", "zh")
+
+
+def test_data_release_then_hoist_rule():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def hit(text):
+        return any(c["id"].endswith("bundle-data-released") for c in store.retrieve(text, "zh", "id", limit=6))
+    assert hit("圓棒十點前會放，再幫忙吊過來包裝站")
+    assert not hit("東西先放旁邊就好")
