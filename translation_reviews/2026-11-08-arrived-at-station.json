@@ -1,0 +1,48 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-08-arrived-at-station",
+ "source": "screenshot review by Claude, 研磨C班 09:34",
+ "items": [
+  {
+   "id": "already-at-station",
+   "src": "zh",
+   "tgt": "id",
+   "source": "異型棒幫忙優先安排處理，現況到站有六噸多，異型那邊今天可能還會大量出",
+   "observed": "Batang profil khusus mohon dibantu diprioritaskan untuk diproses. Saat ini, lebih dari 6 ton material akan tiba di stasiun proses. Hari ini Stasiun packing barang bentuk khusus mungkin masih akan menghasilkan banyak.",
+   "corrected": "Batang profil khusus mohon dibantu diprioritaskan untuk diproses. Saat ini sudah ada lebih dari 6 ton yang tiba di stasiun, dan dari bagian batang profil khusus hari ini kemungkinan masih akan keluar dalam jumlah banyak.",
+   "category": "other",
+   "reason": "「現況到站有六噸多」是已經到站的量，原譯 akan tiba（將會到）時態錯；「異型那邊今天可能還會大量出」是異型棒那邊還會大量出料，原譯自己套成「異型包裝站會產出很多」。",
+   "rule": {
+    "when": [
+     [
+      "到站有",
+      "現況到站",
+      "目前到站",
+      "已到站",
+      "料已經到"
+     ]
+    ],
+    "unless": [
+     "會到",
+     "等等到",
+     "待會到",
+     "快到",
+     "還沒到",
+     "晚點到",
+     "明天到"
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "「現況到站有 N」是已經到站的量",
+    "context": [
+     "「現況到站有 N 噸／料到了／已到站」是已經在站上的量：sudah ada … di stasiun／sudah tiba；不要寫成 akan tiba（將會到）。",
+     "「異型那邊／圓棒那邊還會出」指那一線還會出料，譯 dari bagian batang profil khusus masih akan keluar banyak；不要自行套成某個包裝站。"
+    ],
+    "forbidden": [
+     "akan tiba di stasiun"
+    ]
+   }
+  }
+ ]
+}

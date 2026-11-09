@@ -533,3 +533,13 @@ def test_unload_cart_rule_reaches_same_pattern():
     import factory_knowledge
     cards = factory_knowledge.get_store().retrieve("圓棒要推車，G3再幫忙卸一下料", "zh", "id", limit=6)
     assert any(c["id"].endswith("unload-cart-for-peeling") for c in cards)
+
+
+def test_arrived_at_station_rule_and_its_future_exclusion():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def hit(text):
+        return any(c["id"].endswith("already-at-station") for c in store.retrieve(text, "zh", "id", limit=6))
+    assert hit("圓棒現況到站有三噸，先包圓棒")
+    assert not hit("料等等會到站，先準備")          # genuinely future: rule stays off
+    assert not hit("急單再幫忙注意一下，有到站優先包")   # conditional "if it has arrived", not a stock report
