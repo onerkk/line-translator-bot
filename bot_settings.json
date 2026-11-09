@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.50.0-claude-5-5-gpt-6-prompt-cache-root-fix-2026-10-20",
     "schema_version": 8,
-    "state_hash": "d9529a2a0f95b36f53e6c92652364bf22a6e17c5a655c324327faccc0d69a38c",
-    "updated_at_iso": "2026-11-09T09:59:45.810317+00:00",
-    "updated_at_unix": 1794218385.8103166
+    "state_hash": "ef4d56211e13e90f8b4a55efc435d8e7e2dc51ee50f2322bbb1733a13e5bbd95",
+    "updated_at_iso": "2026-11-09T10:02:21.123335+00:00",
+    "updated_at_unix": 1794218541.123335
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -1324,7 +1324,7 @@
               "text",
               "image"
             ],
-            "enabled": false,
+            "enabled": true,
             "id": "builtin_phrases",
             "label": "⚡ 常用句/Kalimat",
             "link_key": "",
