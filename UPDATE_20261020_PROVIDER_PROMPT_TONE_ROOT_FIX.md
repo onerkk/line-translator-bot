@@ -327,4 +327,6 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
 ## 2026-11-09 研磨C班 14:15（bundle `2026-11-09-customer-shipment-pick`）
 - 已修：「大成抓出貨了，儲區異動幫忙注意一下」原譯把客戶大成當成動手拿貨的人 → Barang 大成 sudah mulai diambil untuk pengiriman；
   規則套用到「客戶名＋抓出貨／出貨了」。
-- 待確認：「Saya tidak dapat melaporkan ke OKGO」的 OKGO 是什麼（原譯「無法向 OKGO 回報」）。
+- 老闆確認後已修：OKGO＝系統流程簡稱，生產完畢沒問題時按下，資料轉到下一製程。「Saya tidak dapat melaporkan ke OKGO」→「我這邊沒辦法按 OKGO（無法完成生產回報，資料轉不到下一製程）」；規則雙向、字邊界比對。
+- 同類根治：學習庫驗證審核修正時沒有帶詞庫，任何保留詞庫英文術語（OKGO、OL、Cincin Pelindung…）的中文修正都會被當成
+  「未翻譯字」默默拒收。現在學習庫驗證與送出前檢查共用同一份詞庫（app 啟動時注入）。OKGO、OL 也登記為雙向保留術語。

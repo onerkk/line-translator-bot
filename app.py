@@ -10353,6 +10353,12 @@ import translation_reviews as translation_reviews_module
 try:
     _REVIEW_BUNDLES = translation_reviews_module.load_bundles()
     _REVIEW_GLOSSARY_ADDED = translation_reviews_module.apply_glossary(GLOSSARY_LOOKUP, _REVIEW_BUNDLES)
+    try:
+        import active_learning as _al_for_glossary
+        _al_for_glossary.GLOSSARY_PAIRS_PROVIDER = lambda _s, _a, _b: ge_module.collect_applicable_pairs(
+            _s, GLOSSARY_LOOKUP, _a, _b)
+    except Exception:
+        pass
     logger.info("[Reviews] %d bundles, %d glossary terms added", len(_REVIEW_BUNDLES), _REVIEW_GLOSSARY_ADDED)
 except Exception as _review_exc:
     logger.warning("[Reviews] bundles skipped: %s", _review_exc)

@@ -549,3 +549,13 @@ def test_customer_shipment_pick_rule_reaches_other_customers():
     import factory_knowledge
     cards = factory_knowledge.get_store().retrieve("SAMWON抓出貨了，儲區有變動", "zh", "id", limit=6)
     assert any(c["id"].endswith("customer-goods-picked") for c in cards)
+
+
+def test_okgo_rule_both_directions():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def hit(text, src, tgt):
+        return any(c["id"].endswith("okgo-production-done") for c in store.retrieve(text, src, tgt, limit=6))
+    assert hit("ID ini belum bisa OKGO", "id", "zh")
+    assert hit("這支做完記得按OKGO", "zh", "id")
+    assert not hit("ok gogo semangat", "id", "zh")

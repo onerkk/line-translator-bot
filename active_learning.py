@@ -46,6 +46,9 @@ _HAN_RE = re.compile(r"[\u3400-\u9fff]")
 
 AL_DB_PATH: Optional[str] = None
 _init_done = False
+# Set by app at import: (source, src, tgt) -> glossary pairs, so correction
+# validation sees the same terminology as delivery validation.
+GLOSSARY_PAIRS_PROVIDER = None
 _lock = threading.RLock()
 
 _stats = {
@@ -346,11 +349,21 @@ def validate_correction(
     if not issues and (source_lang, target_lang) in _SUPPORTED_DIRECTIONS:
         try:
             import translation_quality_gate as quality_module
+            # Validate with the same glossary the live delivery check uses;
+            # without it a correction that keeps a glossary term (OKGO, OL,
+            # Cincin Pelindung) was rejected as an "untranslated word".
+            pairs = ()
+            if GLOSSARY_PAIRS_PROVIDER is not None:
+                try:
+                    pairs = tuple(GLOSSARY_PAIRS_PROVIDER(source, source_lang, target_lang) or ())
+                except Exception:
+                    pairs = ()
             report = quality_module.validate_translation(
                 source,
                 corrected,
                 source_lang,
                 target_lang,
+                glossary_pairs=pairs,
                 require_paragraph_fidelity=False,
             )
             if not report.ok:

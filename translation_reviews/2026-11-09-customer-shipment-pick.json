@@ -30,6 +30,54 @@
      "不要寫成 <客戶名> mengambil barang（客戶自己來拿）。客戶名照原文保留。"
     ]
    }
+  },
+  {
+   "id": "okgo-production-done",
+   "src": "id",
+   "tgt": "zh",
+   "source": "Saya tidak dapat melaporkan ke OKGO",
+   "observed": "我無法向 OKGO 回報。",
+   "corrected": "我這邊沒辦法按 OKGO（無法完成生產回報，資料轉不到下一製程）。",
+   "category": "term",
+   "reason": "老闆確認：OKGO 是系統流程簡稱，代表生產完畢沒問題，按下後資料會轉到下一個製程。原譯「向 OKGO 回報」把它當成回報對象。",
+   "rule": {
+    "when": [
+     [
+      "okgo"
+     ]
+    ],
+    "regex_any": [
+     "(?<![a-z])ok\\s?go(?![a-z])"
+    ],
+    "directions": [
+     "id-zh",
+     "zh-id"
+    ],
+    "title": "OKGO＝生產完畢、資料轉下一製程的系統步驟",
+    "context": [
+     "OKGO 是生產系統的流程簡稱：生產完畢、確認沒問題後按 OKGO，資料就會轉到下一個製程。保留 OKGO 原字。",
+     "印尼文 tidak bisa / tidak dapat (melaporkan ke) OKGO ＝中文「按不了 OKGO／報不了 OKGO」，不是「向 OKGO 回報」；中文「報 OKGO／按 OKGO」＝印尼文 tekan OKGO (selesai produksi, data lanjut ke proses berikutnya)。",
+     "同類：OL 是把工單設為生產中的按鈕。"
+    ],
+    "forbidden": [
+     "向 OKGO 回報",
+     "向OKGO回報"
+    ]
+   },
+   "glossary": [
+    {
+     "zh": "OKGO",
+     "id": "OKGO",
+     "mode": "hard",
+     "reverse_safe": true
+    },
+    {
+     "zh": "OL",
+     "id": "OL",
+     "mode": "hard",
+     "reverse_safe": true
+    }
+   ]
   }
  ]
 }
