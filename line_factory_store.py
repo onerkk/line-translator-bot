@@ -440,7 +440,11 @@ return result
                 "json_extract(value,'$.stop_notification.next_attempt_at'))<=? "
                 "ORDER BY COALESCE(json_extract(value,'$.wake_at'), "
                 "json_extract(value,'$.stop_notification.next_attempt_at')) LIMIT ?",
-                (now, now, limit))]
+                # SQLite parses a few JSON floats one ULP above Python's value
+                # (about 1 in 7,000 timestamps), so "wake_at <= now" was false at
+                # exactly the due instant and that reminder waited for the next
+                # tick. A microsecond of tolerance makes the boundary exact.
+                (now, now + 1e-6, limit))]
         finally:
             db.close()
 

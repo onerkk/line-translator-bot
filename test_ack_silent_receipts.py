@@ -145,3 +145,22 @@ def test_scheduler_receipt_summary_uses_snapshot_without_an_extra_storage_read(h
     hub.h['get_display_name'] = unavailable
     card = json.dumps(hub.reminders._reminder_card(saved, {THIRD: 1}), ensure_ascii=False)
     assert '了解/Paham (1)' in card and '已知成員未回覆/Belum menjawab (0)' in card
+
+
+def test_sqlite_due_index_is_exact_at_the_due_instant(tmp_path):
+    """SQLite reads some JSON timestamps one ULP above Python's float; such a
+    notice must still be due at exactly its due instant (intermittent failure)."""
+    import json as _json, random, sqlite3, time as _time
+    from line_factory_store import FeatureStore
+    db, rnd, wake = sqlite3.connect(":memory:"), random.Random(7), None
+    start = _time.time() + 3600
+    for _ in range(400000):
+        x = start + rnd.random() * 100000
+        if db.execute("select json_extract(?,'$.w')", (_json.dumps({"w": x}),)).fetchone()[0] > x:
+            wake = x
+            break
+    assert wake is not None, "no SQLite rounding case found"
+    store = FeatureStore(path=tmp_path / "f.db")
+    store.put("notice:G:tok0", {"group_id": "G", "token": "tok0", "wake_at": wake}, ttl=30 * 86400)
+    assert [n["token"] for n in store.due_notices(wake)] == ["tok0"]
+    assert store.due_notices(wake - 0.001) == []
