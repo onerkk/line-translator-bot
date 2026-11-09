@@ -131,3 +131,14 @@ def test_access_token_from_another_channel_is_rejected(monkeypatch):
         return R(200, {"userId": "Uaaa"})
     monkeypatch.setattr(requests, "get", fake_ok)
     assert app._phrases_user_from_access_token("t") == "Uaaa"
+
+
+def test_translation_latency_is_measured_per_group(monkeypatch):
+    import app
+    app._LATENCY_SAMPLES.clear()
+    for ms, chars in ((800, 4), (1200, 6), (5000, 120)):
+        app._record_translation_latency("x" * chars, ms, "Cg", True)
+    app._record_translation_latency("x", 9000, "Cother", True)
+    rep = app._latency_report("Cg")
+    assert rep["短句（30字內）"]["n"] == 2 and rep["短句（30字內）"]["max"] == 1200
+    assert rep["長訊息"]["n"] == 1 and rep["長訊息"]["p50"] == 5000

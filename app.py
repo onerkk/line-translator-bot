@@ -16337,6 +16337,30 @@ def _normalize_glossary_case(source, translated):
     return result
 
 
+_LATENCY_SAMPLES = _collections.deque(maxlen=600)
+
+
+def _record_translation_latency(text, ms, group_id, ok):
+    """Rolling per-translation timing for /速度 (in memory; cheap)."""
+    _LATENCY_SAMPLES.append({"ts": time.time(), "ms": round(ms), "chars": len(text or ""),
+                             "group_id": group_id, "ok": ok})
+
+
+def _latency_report(group_id=None, hours=24):
+    cutoff = time.time() - hours * 3600
+    rows = [r for r in list(_LATENCY_SAMPLES) if r["ts"] >= cutoff and (not group_id or r["group_id"] == group_id)]
+    def pct(values, p):
+        if not values:
+            return 0
+        values = sorted(values)
+        return values[min(len(values) - 1, int(round(p * (len(values) - 1))))]
+    out = {}
+    for name, sel in (("短句（30字內）", lambda r: r["chars"] <= 30), ("長訊息", lambda r: r["chars"] > 30)):
+        ms = [r["ms"] for r in rows if sel(r)]
+        out[name] = {"n": len(ms), "p50": pct(ms, .5), "p90": pct(ms, .9), "max": max(ms) if ms else 0}
+    return out
+
+
 _translate_unsanitized = translate
 
 
@@ -16347,7 +16371,13 @@ def translate(text, src, tgt):
     Earlier results may already sit in translation memory with leaked wrapper
     markup; cleaning at the exit fixes those without purging the stores.
     """
+    _started = time.monotonic()
     result = _translate_unsanitized(text, src, tgt)
+    try:
+        _record_translation_latency(text, (time.monotonic() - _started) * 1000.0,
+                                    getattr(_tl, "group_id", "") or "", bool(result))
+    except Exception:
+        pass
     if isinstance(result, str) and result:
         cleaned = _strip_model_wrapper_artifacts(result, text)
         try:
@@ -20366,6 +20396,20 @@ def handle_message(event):
     if group_id and not is_dm:
         # 1. 打「設定」「語言」直接開設定面板(參考 JFETEK 面板 / Ligo 指令的痛點:
         #    工人記不住指令,給一個最自然的中文入口)
+        if text.strip() in ("/速度", "/speed") and is_group_admin(getattr(source, "user_id", None)):
+            # Measured translation speed for this group (since the last restart, up to 24 h).
+            _rep = _latency_report(group_id)
+            _lines = ["⏱ 翻譯速度（本群，最近24小時，版本 " + (os.environ.get("RENDER_GIT_COMMIT", "")[:7] or "?") + "）"]
+            for _name, _v in _rep.items():
+                if _v["n"]:
+                    _lines.append(f"{_name}：{_v['n']} 則｜一般 {_v['p50']/1000:.1f} 秒｜慢的 {_v['p90']/1000:.1f} 秒｜最慢 {_v['max']/1000:.1f} 秒")
+                else:
+                    _lines.append(f"{_name}：還沒有資料")
+            _lines.append("（一般＝中位數；慢的＝最慢的一成）")
+            with ApiClient(configuration) as api_client:
+                MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token, messages=[TextMessage(text="\n".join(_lines))]))
+            return
         if text.strip() in ("/診斷", "/诊断", "/diag") and is_group_admin(getattr(source, "user_id", None)):
             # Evidence for "why wasn't that translated" without opening a URL.
             _rows = [e for e in _diag_kv_read(300)
@@ -24118,6 +24162,9 @@ LIFF_PHRASES_ID = os.environ.get("LIFF_PHRASES_ID", "2009810040-hthJ46K7").strip
 LIFF_LOGIN_CHANNEL_ID = LIFF_PHRASES_ID.split("-", 1)[0] if LIFF_PHRASES_ID else ""
 
 
+_PHRASES_TOKEN_CACHE = {}
+
+
 def _phrases_secret():
     return (LINE_SECRET or os.environ.get("ADMIN_KEY", "") or "phrases-shortcut").strip()
 
@@ -24153,27 +24200,41 @@ def _phrases_user_from_access_token(access_token):
     call then tells us who opened the panel (never trusted from the browser).
     """
     import requests as _rq
+    from concurrent.futures import ThreadPoolExecutor as _Pool
     if not access_token:
         return ""
-    verify = _rq.get("https://api.line.me/oauth2/v2.1/verify",
-                     params={"access_token": access_token}, timeout=8)
-    if verify.status_code != 200:
+    key = hashlib.sha256(access_token.encode("utf-8")).hexdigest()
+    hit = _PHRASES_TOKEN_CACHE.get(key)
+    if hit and hit[1] > time.time():
+        return hit[0]
+    # verify (is it ours, still valid?) and profile (who?) are independent: run
+    # them together so opening the panel costs one LINE round trip, not two.
+    with _Pool(max_workers=2) as pool:
+        f_verify = pool.submit(_rq.get, "https://api.line.me/oauth2/v2.1/verify",
+                               params={"access_token": access_token}, timeout=8)
+        f_profile = pool.submit(_rq.get, "https://api.line.me/v2/profile",
+                                headers={"Authorization": f"Bearer {access_token}"}, timeout=8)
+        verify, profile = f_verify.result(), f_profile.result()
+    if verify.status_code != 200 or profile.status_code != 200:
         return ""
     info = verify.json() or {}
     if LIFF_LOGIN_CHANNEL_ID and str(info.get("client_id")) != LIFF_LOGIN_CHANNEL_ID:
         return ""
-    if int(info.get("expires_in") or 0) <= 0:
+    expires_in = int(info.get("expires_in") or 0)
+    if expires_in <= 0:
         return ""
-    profile = _rq.get("https://api.line.me/v2/profile",
-                      headers={"Authorization": f"Bearer {access_token}"}, timeout=8)
-    if profile.status_code != 200:
-        return ""
-    return str((profile.json() or {}).get("userId") or "")
+    user_id = str((profile.json() or {}).get("userId") or "")
+    if user_id:
+        if len(_PHRASES_TOKEN_CACHE) > 500:
+            _PHRASES_TOKEN_CACHE.clear()
+        _PHRASES_TOKEN_CACHE[key] = (user_id, time.time() + min(900, expires_in))
+    return user_id
 
 
 PHRASES_LIFF_HTML = r"""<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>常用句 / Kalimat</title>
+<link rel="preconnect" href="https://static.line-scdn.net"><link rel="preconnect" href="https://api.line.me">
 <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <style>
 body{margin:0;font-family:-apple-system,"Segoe UI",Roboto,"Noto Sans TC",sans-serif;background:#fff7f2;color:#4a2f27}
@@ -24188,25 +24249,33 @@ button.p:active{background:#ffe3d6}.msg{padding:24px 16px;color:#9a7a6e;font-siz
 const LIFF_ID = __LIFF_ID__;
 const list = document.getElementById('list');
 function show(html){ list.innerHTML = html; }
-async function main(){
-  await liff.init({liffId: LIFF_ID});
-  if (!liff.isInClient()) { show('<div class="msg">請在 LINE 群組裡點底部的「⚡ 常用句」打開。<br>Buka dari tombol "⚡ Kalimat" di grup LINE.</div>'); return; }
-  const g = new URLSearchParams(location.search).get('g') || '';
-  const r = await fetch('/api/liff/phrases', {method:'POST', headers:{'Content-Type':'application/json'},
-                         body: JSON.stringify({g: g, access_token: liff.getAccessToken()})});
-  const d = await r.json();
-  if (!d.ok) { show('<div class="msg">無法讀取，請稍後再試。<br>Gagal memuat, coba lagi nanti.</div>'); return; }
-  if (!d.phrases.length) { show('<div class="msg">你在這個群組還沒有常用句。同一句講過兩次以上，就會出現在這裡。<br>Belum ada kalimat. Kalimat yang kamu kirim 2 kali atau lebih akan muncul di sini.</div>'); return; }
+const G = new URLSearchParams(location.search).get('g') || '';
+let ready = null;
+function render(phrases){
   list.innerHTML = '';
-  d.phrases.forEach(t => {
+  phrases.forEach(t => {
     const b = document.createElement('button'); b.className = 'p'; b.textContent = t;
     b.onclick = async () => {
       b.disabled = true;
-      try { await liff.sendMessages([{type:'text', text: t}]); liff.closeWindow(); }
+      try { await ready; await liff.sendMessages([{type:'text', text: t}]); liff.closeWindow(); }
       catch (e) { b.disabled = false; alert('送出失敗 / Gagal kirim: ' + (e.message || e)); }
     };
     list.appendChild(b);
   });
+}
+// Instant: last list for this group from this phone, refreshed below.
+try { const c = JSON.parse(localStorage.getItem('phr:' + G) || 'null'); if (c && c.length) render(c); } catch (e) {}
+async function main(){
+  ready = liff.init({liffId: LIFF_ID});
+  await ready;
+  if (!liff.isInClient()) { show('<div class="msg">請在 LINE 群組裡點底部的「⚡ 常用句」打開。<br>Buka dari tombol "⚡ Kalimat" di grup LINE.</div>'); return; }
+  const r = await fetch('/api/liff/phrases', {method:'POST', headers:{'Content-Type':'application/json'},
+                         body: JSON.stringify({g: G, access_token: liff.getAccessToken()})});
+  const d = await r.json();
+  if (!d.ok) { show('<div class="msg">無法讀取，請稍後再試。<br>Gagal memuat, coba lagi nanti.</div>'); return; }
+  try { localStorage.setItem('phr:' + G, JSON.stringify(d.phrases)); } catch (e) {}
+  if (!d.phrases.length) { show('<div class="msg">你在這個群組還沒有常用句。同一句講過兩次以上，就會出現在這裡。<br>Belum ada kalimat. Kalimat yang kamu kirim 2 kali atau lebih akan muncul di sini.</div>'); return; }
+  render(d.phrases);
 }
 main().catch(e => show('<div class="msg">發生錯誤 / Error: ' + (e.message || e) + '</div>'));
 </script></body></html>"""
