@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.50.0-claude-5-5-gpt-6-prompt-cache-root-fix-2026-10-20",
     "schema_version": 8,
-    "state_hash": "1127ccb665e73c709ed4b785c8e03d59d6f8067518b3716825a1a2cb3a22ba6d",
-    "updated_at_iso": "2026-11-09T09:45:20.481723+00:00",
-    "updated_at_unix": 1794217520.4817226
+    "state_hash": "7a7f5e8fe64b7a6831d873c9bbbdafdbf783d2708cc11372ca51d6ac056ab9a5",
+    "updated_at_iso": "2026-11-09T09:57:13.211783+00:00",
+    "updated_at_unix": 1794218233.2117827
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -156,7 +156,7 @@
       "gpt-6-luna": "gemini-3.1-flash-lite",
       "gpt-6.1-sol": "gemini-2.5-flash"
     },
-    "last_updated": "2026-11-09 09:31:16",
+    "last_updated": "2026-11-09 09:54:15",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5-5",
       "gpt-4.1-mini": "claude-haiku-5-5",
@@ -196,15 +196,15 @@
     "commands": 19,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 171241,
-    "oai_cached": 37633,
-    "oai_cost_usd": 0.547118005,
-    "oai_input": 573219,
-    "oai_output": 8886,
+    "oai_cache_write": 177723,
+    "oai_cached": 40874,
+    "oai_cost_usd": 0.5482354049999999,
+    "oai_input": 584218,
+    "oai_output": 8921,
     "oai_reasoning": 1212,
-    "text_translations": 332,
-    "tokens_completion": 26342,
-    "tokens_prompt": 4807990,
+    "text_translations": 335,
+    "tokens_completion": 26377,
+    "tokens_prompt": 4818989,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -409,14 +409,14 @@
       "tokens_prompt": 11257
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "cache_read": 3163,
-      "cache_write": 18796,
-      "cost_usd": 0.4155189099999999,
-      "model": "gpt-5.6-luna",
+      "cache_read": 6404,
+      "cache_write": 25278,
+      "cost_usd": 0.4166363099999999,
+      "model": "gpt-6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 2745,
-      "tokens_prompt": 295605
+      "tokens_completion": 2780,
+      "tokens_prompt": 306604
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cache_read": 6326,
@@ -2772,6 +2772,22 @@
         "enabled": true,
         "items": [
           {
+            "action": "phrases",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_phrases",
+            "label": "⚡ 常用句/Kalimat",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
             "action": "natural",
             "clipboard_text": "",
             "cmd_check": "",
@@ -2843,7 +2859,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_personal",
             "label": "👤 我的語言/Bahasa",
             "link_key": "",
@@ -3034,7 +3050,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "qry",
             "label": "🔍 儲區/Gudang",
             "link_key": "",
@@ -3066,7 +3082,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "skip",
             "label": "❌ 不翻我/Lewati",
             "link_key": "",
@@ -3082,7 +3098,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "unskip",
             "label": "✅ 翻譯我/Terjemah",
             "link_key": "",
@@ -3130,7 +3146,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "pkg",
             "label": "📦 包裝碼/Kemas",
             "link_key": "",
