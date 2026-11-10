@@ -692,4 +692,7 @@ def translate_complete_erp_status(text, src, tgt):
     location = "在 " + match["station"] + " " if match["station"] else ""
     # Keep the original OL spelling/case as an immutable control value.
     ol = re.search(r"OL", match.group(), re.I).group()
-    return f"{label}{state}{location}發料（{ol}）。"
+    # Owner-confirmed (2026-10-29): OL is the system button that sets a work order
+    # to "in production", not material issue. The exact reviewed sentence was
+    # answered from memory, but any other ID took this path and still said 發料.
+    return f"{label}{state}{location}按 {ol}（設為生產中）。"

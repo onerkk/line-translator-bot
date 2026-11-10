@@ -4144,6 +4144,18 @@ BUILTIN_EXAMPLES = [
 
 
 def _factory_knowledge_examples_for_casebook():
+    examples = _factory_knowledge_examples_unfiltered()
+    hide = getattr(globals().get("_tl"), "eval_hide_cards", None)
+    if hide:
+        # Learning evaluation: a review card's own example is an exact answer
+        # for its sentence, so it is hidden exactly like the card's guidance.
+        examples = [e for e in examples
+                    if not (str(e.get("case_id", "")).startswith("review_")
+                            and (hide == "all" or str(e.get("case_id", "")).endswith("_" + hide)))]
+    return examples
+
+
+def _factory_knowledge_examples_unfiltered():
     examples = []
     try:
         indexed = getattr(_FACTORY_KNOWLEDGE_STORE, "casebook_examples", None)
@@ -15334,7 +15346,8 @@ def _translate_core(text, src, tgt):
         )
         return _verified_cached
 
-    if _factory_ctx and not _translation_cache_context_bound(text):
+    if (_factory_ctx and not _translation_cache_context_bound(text)
+            and not getattr(_tl, "eval_no_cache", False)):   # learning evaluation never reads memory
         try:
             _persistent_fingerprint = _translation_cache_persistent_fingerprint()
             _verified_tm = tm_module.tm_lookup_verified_exact(
@@ -16420,6 +16433,19 @@ def _fk_retrieve_eval_aware(text, src, tgt, limit=3):
 
 
 _FACTORY_KNOWLEDGE_STORE.retrieve = _fk_retrieve_eval_aware
+
+# Same switch for the exact approved-answer lookup: during a learning
+# evaluation the sentence under test must be translated, not looked up.
+_guard_exact_unfiltered = factory_translation_guard_module.exact_verified_target
+
+
+def _guard_exact_eval_aware(*args, **kwargs):
+    if getattr(_tl, "eval_no_cache", False):
+        return None
+    return _guard_exact_unfiltered(*args, **kwargs)
+
+
+factory_translation_guard_module.exact_verified_target = _guard_exact_eval_aware
 _LEARNING_EVAL_STATE = {"running": False, "last": None}
 
 

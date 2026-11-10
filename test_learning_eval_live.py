@@ -96,3 +96,39 @@ def test_real_pipeline_runs_in_both_modes_without_touching_the_stores(monkeypatc
     assert len(prompts) >= 2                       # no cache / memory hit between the two modes
     assert stored == []                            # evaluation output never enters translation memory
     assert isinstance(app.pick_model("評分"), str) and app.pick_model("評分")
+
+
+def test_no_reviewed_case_is_answered_from_memory_during_evaluation(monkeypatch, tmp_path):
+    """Real failure 2026-11-11: /評測 reported 5.0 vs 5.0 because both modes were
+    served the approved answer (review-card examples act as exact memory)."""
+    import active_learning as al
+    import translation_reviews as tr
+    from test_translation_instruction_cost_quality import response
+    monkeypatch.setattr(al, "AL_DB_PATH", str(tmp_path / "al.db"))
+    monkeypatch.setattr(al, "_init_done", False)
+    al.init()
+    tr.apply_corrections(al, tr.load_bundles())
+    app.translation_casebook_module.invalidate_active_cache()
+    calls = []
+    def create(**kw):
+        calls.append(1)
+        return response("MODEL OUTPUT")
+    monkeypatch.setattr(app.ai.chat.completions, "create", create)
+    routes = []
+    original_log = app._log_translation
+    def spy(*a, **k):
+        routes.append(str(a[4]) if len(a) > 4 else "?")
+        return original_log(*a, **k)
+    monkeypatch.setattr(app, "_log_translation", spy)
+    served_from_memory, without_model = [], set()
+    for case in live.load_cases(100, seed=1):
+        for mode, hide in live.MODES:
+            before = len(calls); routes.clear()
+            live.translate_in_mode(app, case, hide)
+            if any(("verified" in r) or ("cache" in r) or r.startswith("tm") for r in routes):
+                served_from_memory.append((case["item_id"], mode, list(routes)))
+            if len(calls) == before:
+                without_model.add(case["item_id"])
+    assert served_from_memory == []
+    # Only deterministic local translators (fixed record/ERP phrasing) may answer without a model.
+    assert len(without_model) <= 4, sorted(without_model)

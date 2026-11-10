@@ -21,7 +21,7 @@ import translation_quality_gate as quality
 
 
 SCREENSHOTS = [
-    ("id", "zh", "ID ini tidak bisa di OL di I6", "此 ID 的資料無法在 I6 發料（OL）。"),
+    ("id", "zh", "ID ini tidak bisa di OL di I6", "此 ID 的資料無法在 I6 按 OL（設為生產中）。"),
     ("id", "zh", "Sip pagi menjalan kan barang dengan kondisi laser kotor", "早班在雷射測徑儀髒污的情況下生產。"),
     ("id", "zh", "ID ini ada barang rusak 1 pcs saya buang sehingga kg berkurang saya menggunakan no pekerja Ketua kelas",
      "這筆 ID 有料件損壞，我丟棄了 1 支，因此重量減少。我使用的是班長的工號。"),
@@ -54,9 +54,9 @@ def test_screenshot_meanings_survive_shared_delivery_gate(src, tgt, source, targ
 
 @pytest.mark.parametrize("source,bad,issue", [
     ("ID ini tidak bisa di OL di I6", "此 ID 無法在 I6 進行線上操作。", "erp_ol"),
-    ("ID ini tidak bisa di OL di I6", "此 ID 已在 I6 發料（OL）。", "state_changed"),
-    ("Data I9 belum di-OL", "I9 資料已發料（OL）。", "state_changed"),
-    ("Data I9 jangan di OL", "I9 資料可以發料（OL）。", "state_changed"),
+    ("ID ini tidak bisa di OL di I6", "此 ID 已在 I6 按 OL（設為生產中）。", "state_changed"),
+    ("Data I9 belum di-OL", "I9 資料已按 OL（設為生產中）。", "state_changed"),
+    ("Data I9 jangan di OL", "I9 資料可以按 OL（設為生產中）。", "state_changed"),
     ("Laser mesin I6 kotor", "I6 雷射光故障了。", "laser_gauge"),
     ("Saya menggunakan no pekerja ketua kelas", "我使用課長的工人人數。", "employee_number"),
 ])
@@ -149,8 +149,8 @@ def test_bad_ol_cache_is_evicted_even_with_current_asset_fingerprint(isolated_co
 
 
 @pytest.mark.parametrize("source,good,bad", [
-    ("Data I6 sudah di OL dan data I9 belum di OL", "I6 資料已發料（OL），I9 資料尚未發料（OL）。", "I6 資料尚未發料（OL），I9 資料已發料（OL）。"),
-    ("Data I6 sudah di OL tetapi tidak bisa produksi", "I6 資料已發料（OL），但是無法生產。", "I6 資料尚未發料（OL），但是無法生產。"),
+    ("Data I6 sudah di OL dan data I9 belum di OL", "I6 資料已按 OL（設為生產中），I9 資料尚未按 OL（設為生產中）。", "I6 資料尚未按 OL（設為生產中），I9 資料已按 OL（設為生產中）。"),
+    ("Data I6 sudah di OL tetapi tidak bisa produksi", "I6 資料已按 OL（設為生產中），但是無法生產。", "I6 資料尚未按 OL（設為生產中），但是無法生產。"),
     ("請勿在 I6 發料 OL", "Jangan di OL di I6.", "Data sudah di OL di I6."),
 ])
 def test_erp_state_stays_with_its_operation_and_station(source, good, bad):
@@ -175,13 +175,13 @@ def test_spelling_normalization_preserves_shift_and_identifiers(isolated_context
 
 def test_compact_knowledge_index_reloads_and_does_not_leak_mutations(tmp_path):
     document = {"schema_version": 1, "entries": [{"id": "erp-test", "directions": ["id-zh"],
-        "match": {"any_terms": ["data"]}, "examples": [{"source": "Data sudah di OL", "target": "資料已發料（OL）。"}]}]}
+        "match": {"any_terms": ["data"]}, "examples": [{"source": "Data sudah di OL", "target": "資料已按 OL（設為生產中）。"}]}]}
     path = tmp_path / "knowledge.json"
     path.write_text(json.dumps(document))
     store = factory_knowledge.FactoryKnowledgeStore(str(path))
     first = store.casebook_examples()
     first[0]["zh"] = "污染"
-    assert store.casebook_examples()[0]["zh"] == "資料已發料（OL）。"
+    assert store.casebook_examples()[0]["zh"] == "資料已按 OL（設為生產中）。"
     document["entries"][0]["examples"][0]["target"] = "資料已轉為 OL 狀態。"
     path.write_text(json.dumps(document))
     store.reload(force=True)
