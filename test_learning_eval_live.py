@@ -45,34 +45,54 @@ def test_corrections_and_cache_switches(monkeypatch):
             app._tl.__dict__.pop(k, None)
 
 
-def test_report_compares_untrained_with_generalised(monkeypatch):
-    calls = []
-    def fake_translate(app_module, case, hide):
-        calls.append(hide)
+def test_report_counts_repeated_mistakes_on_new_sentences(monkeypatch):
+    seen = []
+    def fake_translate(app_module, text, src, tgt, hide_learning):
+        seen.append((text, hide_learning))
         assert getattr(app_module._tl, "eval_hide_cards", None) is None      # switches never leak out
-        return "baik" if hide == "own" else "buruk"
-    monkeypatch.setattr(live, "translate_in_mode", fake_translate)
-    judge = lambda app_module, case, output, model: {"score": 5 if output == "baik" else 3, "note": ""}
-    report = live.run(app, limit=4, seed=1, judge_model="m", judge=judge)
-    assert report["cases"] == 4 and report["scored"] == 4 and calls.count("all") == 4 and calls.count("own") == 4
-    assert report["untrained"] == 3 and report["generalised"] == 5 and len(report["better"]) == 4
+        return "salah" if hide_learning else "benar"
+    monkeypatch.setattr(live, "translate_text", fake_translate)
+    variant = lambda app_module, case, model: "新句子 " + case["item_id"]
+    judge = lambda app_module, case, variant_text, output, model: {"repeats": output == "salah", "note": ""}
+    report = live.run(app, limit=4, seed=1, model="m", variant_fn=variant, judge_fn=judge)
+    assert report["scored"] == 4 and report["untrained_mistakes"] == 4 and report["trained_mistakes"] == 0
+    assert len(report["fixed"]) == 4 and report["still_wrong"] == [] and report["newly_wrong"] == []
+    assert all(text.startswith("新句子 ") for text, _ in seen)               # the stored sentence is never the exam
     text = live.summary_text(report, "abc1234")
-    assert "有變聰明" in text and "+2" in text and "abc1234" in text
+    assert "有學到" in text and "沒學過：4 題" in text and "學過後：0 題" in text and "abc1234" in text
 
 
-def test_translate_in_mode_restores_thread_state(monkeypatch):
+def test_summary_is_honest_when_nothing_improves_or_cannot_tell():
+    base = {"scored": 5, "fixed": [], "still_wrong": ["a", "b"], "newly_wrong": [], "never_wrong": ["c", "d", "e"],
+            "untrained_mistakes": 2, "trained_mistakes": 2}
+    assert "沒有改善" in live.summary_text(base) and "仍然錯：a、b" in live.summary_text(base)
+    none = dict(base, still_wrong=[], untrained_mistakes=0, trained_mistakes=0, never_wrong=list("abcde"))
+    assert "看不出學習的差別" in live.summary_text(none)
+    worse = dict(base, still_wrong=[], newly_wrong=["x"], untrained_mistakes=0, trained_mistakes=1)
+    assert "變差了" in live.summary_text(worse) and "反而變錯：x" in live.summary_text(worse)
+
+
+def test_unusable_variants_are_skipped_not_scored(monkeypatch):
+    monkeypatch.setattr(live, "translate_text", lambda *a, **k: "x")
+    report = live.run(app, limit=3, seed=2, model="m", variant_fn=lambda *a: "",
+                      judge_fn=lambda *a: {"repeats": False, "note": ""})
+    assert report["scored"] == 0 and report["skipped"] == 3
+    assert "沒有可評分" in live.summary_text(report)
+
+
+def test_translate_text_sets_and_restores_thread_state(monkeypatch):
     seen = {}
     def fake(text, src, tgt):
-        seen.update(cache=app._tl.eval_no_cache, hide=app._tl.eval_hide_source, cards=app._tl.eval_hide_cards)
+        seen.update(cache=app._tl.eval_no_cache, hide=getattr(app._tl, "eval_hide_source", None),
+                    cards=getattr(app._tl, "eval_hide_cards", None))
         return "ok"
     monkeypatch.setattr(app, "translate", fake)
     app._tl.group_id = "Ckeep"
-    case = {"source": "S", "item_id": "x", "src_lang": "zh", "tgt_lang": "id"}
-    assert live.translate_in_mode(app, case, "own") == "ok"
-    assert seen == {"cache": True, "hide": "S", "cards": "x"}
+    assert live.translate_text(app, "S", "zh", "id", True) == "ok"
+    assert seen == {"cache": True, "hide": "*", "cards": "all"}
     assert app._tl.group_id == "Ckeep" and not hasattr(app._tl, "eval_no_cache")
-    live.translate_in_mode(app, case, "all")
-    assert seen["hide"] == "*" and seen["cards"] == "all"
+    live.translate_text(app, "S", "zh", "id", False)
+    assert seen == {"cache": True, "hide": None, "cards": None}          # trained: everything learned stays on
 
 
 def test_real_pipeline_runs_in_both_modes_without_touching_the_stores(monkeypatch):
@@ -82,25 +102,22 @@ def test_real_pipeline_runs_in_both_modes_without_touching_the_stores(monkeypatc
         prompts.append(str(kw.get("messages")))
         return response("Tidak dipasang Cincin Pelindung.")
     monkeypatch.setattr(app.ai.chat.completions, "create", create)
-    case = next(c for c in live.load_cases(100, seed=3) if c["item_id"] == "tidak-bulat-out-of-round" or True)
-    case = {"id": "x", "item_id": "nonexistent", "source": "這捆沒有加套環", "corrected": "Bundel ini tidak dipasang Cincin Pelindung.",
-            "src_lang": "zh", "tgt_lang": "id", "category": "term"}
     stored = []
     monkeypatch.setattr(app, "_post_translation_async", lambda *a, **k: stored.append(a))
     class Now:
         def submit(self, fn, *a, **k):
             fn(*a, **k)
     monkeypatch.setattr(app, "_BG_POST_EXECUTOR", Now())
-    for hide in ("all", "own"):
-        assert "Cincin Pelindung" in live.translate_in_mode(app, case, hide)
+    for hide in (True, False):
+        assert "Cincin Pelindung" in live.translate_text(app, "這捆沒有加套環", "zh", "id", hide)
     assert len(prompts) >= 2                       # no cache / memory hit between the two modes
     assert stored == []                            # evaluation output never enters translation memory
     assert isinstance(app.pick_model("評分"), str) and app.pick_model("評分")
 
 
-def test_no_reviewed_case_is_answered_from_memory_during_evaluation(monkeypatch, tmp_path):
-    """Real failure 2026-11-11: /評測 reported 5.0 vs 5.0 because both modes were
-    served the approved answer (review-card examples act as exact memory)."""
+def test_untrained_mode_never_answers_a_reviewed_sentence_from_memory(monkeypatch, tmp_path):
+    """Real failure 2026-11-11: /評測 reported 5.0 vs 5.0 because the approved
+    answer was served from four different memory layers."""
     import active_learning as al
     import translation_reviews as tr
     from test_translation_instruction_cost_quality import response
@@ -122,13 +139,12 @@ def test_no_reviewed_case_is_answered_from_memory_during_evaluation(monkeypatch,
     monkeypatch.setattr(app, "_log_translation", spy)
     served_from_memory, without_model = [], set()
     for case in live.load_cases(100, seed=1):
-        for mode, hide in live.MODES:
-            before = len(calls); routes.clear()
-            live.translate_in_mode(app, case, hide)
-            if any(("verified" in r) or ("cache" in r) or r.startswith("tm") for r in routes):
-                served_from_memory.append((case["item_id"], mode, list(routes)))
-            if len(calls) == before:
-                without_model.add(case["item_id"])
+        before = len(calls); routes.clear()
+        live.translate_text(app, case["source"], case["src_lang"], case["tgt_lang"], True)
+        if any(("verified" in r) or ("cache" in r) or r.startswith("tm") for r in routes):
+            served_from_memory.append((case["item_id"], list(routes)))
+        if len(calls) == before:
+            without_model.add(case["item_id"])
     assert served_from_memory == []
     # Only deterministic local translators (fixed record/ERP phrasing) may answer without a model.
     assert len(without_model) <= 4, sorted(without_model)
@@ -156,3 +172,20 @@ def test_generic_workplace_words_do_not_pull_in_an_unrelated_correction(monkeypa
         assert any("異型棒" in str(c.get("source", "")) for c in related)
     finally:
         app._tl.__dict__.clear()
+
+
+def test_a_new_sentence_of_the_same_kind_receives_the_lesson_only_when_trained(monkeypatch):
+    """The exam can only show learning if the lesson reaches a sentence that was
+    never stored: here a different ID with the same OKGO wording."""
+    from test_translation_instruction_cost_quality import response
+    prompts = {}
+    state = {"mode": None}
+    def create(**kw):
+        prompts[state["mode"]] = str(kw.get("messages"))
+        return response("ID 7K902200 還沒辦法按 OKGO。")
+    monkeypatch.setattr(app.ai.chat.completions, "create", create)
+    for hide in (True, False):
+        state["mode"] = "untrained" if hide else "trained"
+        live.translate_text(app, "ID 7K902200 belum bisa OKGO", "id", "zh", hide)
+    assert "下一個製程" in prompts["trained"] or "下一製程" in prompts["trained"]
+    assert "下一個製程" not in prompts["untrained"] and "下一製程" not in prompts["untrained"]

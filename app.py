@@ -16459,8 +16459,8 @@ def _run_learning_eval_and_push(group_id, limit=10):
         text = learning_eval_live.summary_text(report, os.environ.get("RENDER_GIT_COMMIT", "")[:7])
         try:
             _event_log_write("learning_eval", {k: report.get(k) for k in
-                             ("cases", "scored", "untrained", "generalised", "same")} |
-                             {"better": len(report.get("better", [])), "worse": len(report.get("worse", []))})
+                             ("version", "cases", "scored", "skipped", "untrained_mistakes", "trained_mistakes",
+                              "fixed", "still_wrong", "newly_wrong")})
         except Exception:
             pass
     except Exception as exc:
@@ -20515,14 +20515,14 @@ def handle_message(event):
         # 1. 打「設定」「語言」直接開設定面板(參考 JFETEK 面板 / Ligo 指令的痛點:
         #    工人記不住指令,給一個最自然的中文入口)
         if text.strip() in ("/評測", "/评测", "/eval") and is_group_admin(getattr(source, "user_id", None)):
-            # Measures whether teaching transfers to sentences never corrected
-            # (about 40 calls to the cheapest model; runs in the background).
+            # Measures whether a taught mistake recurs on NEW sentences of the same
+            # kind (about 50 calls to the cheapest model; runs in the background).
             if _LEARNING_EVAL_STATE["running"]:
                 _msg = "📊 評測進行中，完成後會把結果傳到這個群組。"
             else:
                 _LEARNING_EVAL_STATE["running"] = True
                 threading.Thread(target=_run_learning_eval_and_push, args=(group_id,), daemon=True).start()
-                _msg = "📊 開始評測（抽 10 句，約 1～2 分鐘），完成後會把結果傳到這個群組。"
+                _msg = "📊 開始評測（出 10 題同類新句子，約 2～3 分鐘），完成後會把結果傳到這個群組。"
             with ApiClient(configuration) as api_client:
                 MessagingApi(api_client).reply_message(ReplyMessageRequest(
                     reply_token=event.reply_token, messages=[TextMessage(text=_msg)]))
