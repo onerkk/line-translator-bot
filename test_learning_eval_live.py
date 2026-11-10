@@ -132,3 +132,27 @@ def test_no_reviewed_case_is_answered_from_memory_during_evaluation(monkeypatch,
     assert served_from_memory == []
     # Only deterministic local translators (fixed record/ERP phrasing) may answer without a model.
     assert len(without_model) <= 4, sorted(without_model)
+
+
+def test_generic_workplace_words_do_not_pull_in_an_unrelated_correction(monkeypatch, tmp_path):
+    """Regression from the first real /評測: 回報/安排/工作 alone attached a long
+    異型棒 notice to a PPE-photo request and made the translation worse."""
+    import active_learning as al
+    import translation_reviews as tr
+    monkeypatch.setattr(al, "AL_DB_PATH", str(tmp_path / "al.db"))
+    monkeypatch.setattr(al, "_init_done", False)
+    al.init()
+    tr.apply_corrections(al, tr.load_bundles())
+    app.translation_casebook_module.invalidate_active_cache()
+    src = "早上工作安排後，安全護具的拍照回報先讓我拍穿長袖制服，要脫後面再脫掉🙏"
+    try:
+        app._tl.__dict__.clear()
+        app._tl.eval_hide_source, app._tl.eval_hide_cards = src, "ppe-photo-who-wears"
+        cases = app._retrieve_verified_translation_cases(src, "zh", "id", max_cases=3)
+        assert [c for c in cases if "異型棒" in str(c.get("source", ""))] == []
+        # a sentence that really shares the subject still finds its reference
+        related = app._retrieve_verified_translation_cases(
+            "線外人員入儲分流時注意異型棒出料，地上有3把檢驗完成就上車", "zh", "id", max_cases=3)
+        assert any("異型棒" in str(c.get("source", "")) for c in related)
+    finally:
+        app._tl.__dict__.clear()

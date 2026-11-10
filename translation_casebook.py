@@ -380,6 +380,14 @@ _GENERIC_REFERENCE_ANCHORS = frozenset({
     "設備", "機台", "機器", "時間", "資料", "單位", "班別", "進行", "完成",
     "上午", "中午", "下午", "晚上", "明天", "今天", "昨天", "星期", "禮拜",
     "concept:inspect", "besok", "kemarin", "siang", "sore", "malam", "pagi",
+    # Everyday workplace vocabulary: present in almost every notice, so sharing
+    # it says nothing about the subject. (Measured 2026-11-11: a PPE-photo
+    # request pulled in a long 異型棒 notice on 回報/安排/工作 alone and the
+    # learning evaluation scored the result lower than with no reference.)
+    "回報", "安排", "工作", "幫忙", "注意", "麻煩", "處理", "作業", "人員", "大家",
+    "狀況", "確認", "通知", "目前", "現在", "之後", "問題", "需要", "記得",
+    "laporan", "melapor", "lapor", "kerja", "bekerja", "pekerjaan", "bantu", "tolong", "mohon",
+    "perhatikan", "semua", "setiap", "hari", "sudah", "belum", "nanti", "dulu",
 })
 
 
@@ -630,7 +638,9 @@ def _rank_references(query, src, tgt, direction_cases, glossary, min_score):
         # different sentence. Exact matches remain authoritative.
         if ((case.get("bad_target") or case.get("verified_correction"))
                 and not source_match and score < 9.0
-                and len(distinctive_anchors) < 2
+                # Two shared anchors, at least one of them real subject matter:
+                # everyday words alone (回報／安排／工作) never qualify a case.
+                and (len(distinctive_anchors) < 2 or not specific)
                 and query_view_identity != source_view_identity):
             # A new typo inside otherwise distinctive wording may leave only
             # one exact content anchor. Admit it as evidence, never local reuse.
