@@ -1,0 +1,73 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-12-grinding-c-evening",
+ "source": "screenshot review by Claude, 研磨C班 19:05 / 19:46",
+ "items": [
+  {
+   "id": "bare-ru-means-warehouse-in",
+   "src": "zh",
+   "tgt": "id",
+   "source": "木箱留個1～2把最後半小時入",
+   "observed": "Sisakan 1–2 bundel di peti kayu untuk dimasukkan pada setengah jam terakhir.",
+   "corrected": "Untuk yang dikemas peti kayu, sisakan 1–2 bundel untuk dimasukkan ke gudang pada setengah jam terakhir.",
+   "category": "omission",
+   "reason": "句尾單獨的「入」是「入庫」：木箱包裝的料留 1～2 把到最後半小時再入庫。原譯 dimasukkan 沒說入到哪裡，而且 di peti kayu 讀起來像把料留在木箱裡、最後再放進去。",
+   "rule": {
+    "when": [
+     [
+      "把",
+      "捆",
+      "噸",
+      "支",
+      "件"
+     ]
+    ],
+    "regex_any": [
+     "(?:再|才|先|時|前|後|要|可以|幫忙|優先|半小時)入(?![庫儲料口帳力圍座選住學職])\\s*(?:[。！，,\\s]|$)",
+     "入\\s*\\d+(?:\\.\\d+)?\\s*(?:噸|把|捆|支|件)"
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "句中單獨的「入」＝入庫",
+    "context": [
+     "包裝站語境裡單獨的「入」（最後半小時入、一天要入21噸、先入、再入）是「入庫」：masukkan ke gudang／pemasukan ke gudang，要把 ke gudang 寫出來。",
+     "「木箱留N把」的木箱是指用木箱包裝的那批料（untuk yang dikemas peti kayu），不是把料留在木箱裡。"
+    ]
+   }
+  },
+  {
+   "id": "barang-kecil-undersize",
+   "src": "id",
+   "tgt": "zh",
+   "source": "Id ini bayak barang kecil",
+   "observed": "這個 ID 有很多小料",
+   "corrected": "這個 ID 有很多料尺寸偏小。",
+   "category": "term",
+   "reason": "量測／回報語境的 barang kecil 是料的尺寸偏小（同事附的是分厘卡量測照片），不是「小料」（小塊的料）。bayak 是 banyak 的錯字。",
+   "rule": {
+    "when": [
+     [
+      "barang kecil",
+      "ukuran kecil",
+      "ukurannya kecil",
+      "berukuran kecil",
+      "material kecil",
+      "barangnya kecil"
+     ]
+    ],
+    "directions": [
+     "id-zh"
+    ],
+    "title": "barang kecil＝料尺寸偏小",
+    "context": [
+     "量測、外觀回報語境的 barang kecil／ukuran kecil 是「料的尺寸偏小」，不要譯成「小料」「小東西」。",
+     "同類：barang besar／ukuran besar＝尺寸偏大；tidak bulat＝不圓。保留主詞，譯成完整句。"
+    ],
+    "forbidden": [
+     "小料"
+    ]
+   }
+  }
+ ]
+}

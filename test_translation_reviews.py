@@ -591,3 +591,16 @@ def test_learned_rules_fire_on_their_cases_and_stay_quiet_on_ordinary_chat():
     leaks = [(text, c["id"]) for (src, tgt), texts in ordinary.items() for text in texts
              for c in store.retrieve(text, src, tgt, limit=8) if c["id"].startswith("review_")]
     assert leaks == []
+
+
+def test_bare_ru_and_undersize_rules_route_and_stay_quiet():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def hit(text, src, tgt, suffix):
+        return any(c["id"].endswith(suffix) for c in store.retrieve(text, src, tgt, limit=8))
+    assert hit("圓棒留3把下班前再入", "zh", "id", "bare-ru-means-warehouse-in")
+    assert hit("異型棒今天要入15噸", "zh", "id", "bare-ru-means-warehouse-in")
+    assert not hit("這3把先入庫", "zh", "id", "bare-ru-means-warehouse-in")        # already explicit
+    assert not hit("新人下週加入我們班", "zh", "id", "bare-ru-means-warehouse-in")
+    assert hit("Bundel ini banyak barang kecil", "id", "zh", "barang-kecil-undersize")
+    assert not hit("Barang sudah datang", "id", "zh", "barang-kecil-undersize")
