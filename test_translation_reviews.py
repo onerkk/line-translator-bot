@@ -623,3 +623,15 @@ def test_demonstrative_bundle_must_survive_translation():
     import factory_knowledge
     cards = factory_knowledge.get_store().retrieve("這把先放著，等品保看過再包", "zh", "id", limit=8)
     assert any(c["id"].endswith("na-ba-that-bundle") for c in cards)
+
+
+def test_tag_rule_routes_and_stays_quiet():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def hit(text):
+        return any(c["id"].endswith("plastic-tag-not-board") for c in store.retrieve(text, "zh", "id", limit=8))
+    assert hit("這捆的吊牌掉了，幫忙補上")
+    assert not hit("那台車的車牌是多少")
+    lookup = {}
+    reviews.apply_glossary(lookup, reviews.load_bundles())
+    assert lookup["塑膠牌"]["idn"] == "tag plastik"

@@ -1,0 +1,54 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-16-plastic-tags",
+ "source": "screenshot review by Claude, 研磨C班 11/16 01:46",
+ "items": [
+  {
+   "id": "plastic-tag-not-board",
+   "src": "zh",
+   "tgt": "id",
+   "source": "分流挖料後再注意一下地面掉落的東西，上次有主管反應地面很多塑膠牌",
+   "observed": "Setelah memisahkan dan mengambil material, perhatikan lagi benda-benda yang jatuh di lantai. Sebelumnya ada atasan yang mengeluhkan banyak papan plastik di lantai.",
+   "corrected": "Setelah pemilahan dan mengambil material dari tumpukan, mohon perhatikan juga benda-benda yang jatuh di lantai. Sebelumnya ada atasan yang menyampaikan bahwa di lantai banyak tag plastik.",
+   "category": "term",
+   "reason": "「塑膠牌」是掛在料上的塑膠標示牌（tag plastik），原譯 papan plastik 是「塑膠板」。另外「再注意一下」的「再」是「也順便」，不是「再一次」（lagi）。",
+   "glossary": [
+    {
+     "zh": "塑膠牌",
+     "id": "tag plastik",
+     "mode": "hard"
+    }
+   ],
+   "rule": {
+    "when": [
+     [
+      "塑膠牌",
+      "吊牌",
+      "鐵牌",
+      "紙牌",
+      "牌子"
+     ]
+    ],
+    "unless": [
+     "車牌",
+     "門牌",
+     "招牌",
+     "品牌",
+     "撲克牌",
+     "打牌"
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "料上的「牌」＝tag（標示牌），不是 papan",
+    "context": [
+     "工廠裡掛在料／捆上的「塑膠牌、吊牌、鐵牌、牌子」是標示用的 tag（tag plastik、tag gantung、tag besi），不要譯成 papan（板子）。",
+     "「…後再注意一下」的「再」是「之後也」，譯 mohon perhatikan juga，不是 lagi（再一次）。"
+    ],
+    "forbidden": [
+     "papan plastik"
+    ]
+   }
+  }
+ ]
+}
