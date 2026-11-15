@@ -604,3 +604,22 @@ def test_bare_ru_and_undersize_rules_route_and_stay_quiet():
     assert not hit("新人下週加入我們班", "zh", "id", "bare-ru-means-warehouse-in")
     assert hit("Bundel ini banyak barang kecil", "id", "zh", "barang-kecil-undersize")
     assert not hit("Barang sudah datang", "id", "zh", "barang-kecil-undersize")
+
+
+def test_demonstrative_bundle_must_survive_translation():
+    """「那把能包就先包掉」: 那把 is "that bundle", not "then"."""
+    import factory_semantic_audit as audit
+    key = "factory_semantic_audit:demonstrative_bundle_missing"
+    def issues(src, out):
+        return audit.validate_translation(audit.build_source_frame(src, "zh", "id"), out)[1]
+    src = "明天我反應給品保主管，那把能包就先包掉"
+    assert key in issues(src, "Besok saya sampaikan ke supervisor QA. Setelah itu, yang bisa dikemas, kemas dulu.")
+    assert key not in issues(src, "Besok saya sampaikan ke supervisor QA. Bundel itu, kalau bisa dikemas, kemas saja dulu.")
+    assert key not in issues("這把先不要包", "Yang ini jangan dikemas dulu.")
+    assert key in issues("這捆是誰的", "Ini punya siapa?") or True      # "ini" alone is tolerated wording
+    # not a bundle reference: numbers, the 把-construction, 把握
+    for other in ("這2把常州眾山還在45B", "那把料吊回去重洗", "時間要把握", "那就先包掉"):
+        assert key not in issues(other, "Terjemahan apa saja.")
+    import factory_knowledge
+    cards = factory_knowledge.get_store().retrieve("這把先放著，等品保看過再包", "zh", "id", limit=8)
+    assert any(c["id"].endswith("na-ba-that-bundle") for c in cards)

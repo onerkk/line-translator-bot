@@ -1,0 +1,45 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-16-that-bundle",
+ "source": "screenshot review by Claude, 研磨C班 11/15 23:33",
+ "items": [
+  {
+   "id": "na-ba-that-bundle",
+   "src": "zh",
+   "tgt": "id",
+   "source": "明天我反應給品保主管，那把能包就先包掉",
+   "observed": "Besok saya sampaikan ke supervisor QA. Setelah itu, yang bisa dikemas, kemas dulu.",
+   "corrected": "Besok saya sampaikan ke supervisor QA. Bundel itu, kalau bisa dikemas, kemas saja dulu.",
+   "category": "omission",
+   "reason": "「那把」是「那一把（捆）料」，不是「那就／然後」。原譯漏掉指的是哪一把，還多了原文沒有的「Setelah itu（之後）」，變成「之後能包的先包」，對象與時間都錯。",
+   "rule": {
+    "when": [
+     [
+      "那把",
+      "這把",
+      "哪把",
+      "該把"
+     ]
+    ],
+    "unless": [
+     "把握",
+     "那把刀",
+     "這把刀",
+     "那把鑰匙",
+     "這把鑰匙"
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "「那把／這把」＝那一捆料（bundel itu／ini）",
+    "context": [
+     "「那把／這把／哪把」後面接動詞或「能、先、就、要」時，「把」是量詞，指特定的一捆料：bundel itu／bundel ini／bundel yang mana。不要把「那」當成「那就／然後」。",
+     "「能包就先包掉」是「可以包的話就先包」（kalau bisa dikemas, kemas saja dulu），原文沒有先後順序就不要加 setelah itu／lalu。"
+    ],
+    "forbidden": [
+     "Setelah itu, yang bisa dikemas"
+    ]
+   }
+  }
+ ]
+}

@@ -159,7 +159,8 @@ def test_sqlite_due_index_is_exact_at_the_due_instant(tmp_path):
         if db.execute("select json_extract(?,'$.w')", (_json.dumps({"w": x}),)).fetchone()[0] > x:
             wake = x
             break
-    assert wake is not None, "no SQLite rounding case found"
+    if wake is None:        # this SQLite build parses floats exactly; nothing to reproduce
+        pytest.skip("this SQLite version has no float rounding difference")
     store = FeatureStore(path=tmp_path / "f.db")
     store.put("notice:G:tok0", {"group_id": "G", "token": "tok0", "wake_at": wake}, ttl=30 * 86400)
     assert [n["token"] for n in store.due_notices(wake)] == ["tok0"]

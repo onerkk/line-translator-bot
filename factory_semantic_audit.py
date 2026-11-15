@@ -448,6 +448,13 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
             unscoped_prohibition_source = unscoped_prohibition_source.replace(relation["polarity_evidence"], "", 1)
     flags["prohibition"] = _contains_any(unscoped_prohibition_source, ("不可以", "不可", "不得", "禁止", "不能", "不要"))
     flags["hoist_or_load"] = _contains_any(compact, ("吊", "上料", "上機", "上机", "裝料", "装料"))
+    # 「那把／這把／哪捆」 followed by a verb or particle points at one specific
+    # bundle (把/捆 = measure word). It is easy to misread 那 as "then" and lose
+    # the object ("那把能包就先包掉" became "Setelah itu, yang bisa dikemas…").
+    # 把 directly followed by a noun is the disposal construction and is skipped.
+    flags["demonstrative_bundle"] = bool(src_lang == "zh" and re.search(
+        r"(?<![一二兩两三四五六七八九十\d])[這这那哪該该此]\s*[把捆]"
+        r"(?=[能可先要是有的也都還还就不沒没已會会在再才，,。？?！!\s]|$)", compact))
     flags["slow_run"] = _contains_any(compact, ("慢慢跑", "慢跑", "跑很慢", "慢慢生產", "慢慢生产"))
     flags["explicit_crane"] = _contains_any(compact, _EXPLICIT_CRANE_ZH)
     flags["explicit_speed"] = _contains_any(compact, _EXPLICIT_SPEED_ZH)
@@ -1908,8 +1915,16 @@ def deterministic_rebuild(frame: Mapping[str, Any]) -> str:
 
 def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bool, List[str]]:
     """Check whether the target preserves the source-derived operational frame."""
+    # Checked even when the full operational audit is not active: a short
+    # everyday line can still point at one specific bundle.
+    bundle_issue: List[str] = []
+    if (frame and (frame.get("flags") or {}).get("demonstrative_bundle")
+            and str(frame.get("tgt_lang", "")).startswith("id") and translation
+            and not re.search(r"\b(?:bundel|bendel|ikat(?:an)?)\b|\byang\s+(?:itu|ini|mana|tadi|satu)\b",
+                              _norm(translation))):
+        bundle_issue = ["factory_semantic_audit:demonstrative_bundle_missing"]
     if not frame or not frame.get("active"):
-        return True, []
+        return (not bundle_issue), bundle_issue
     low = _norm(translation)
     flags = frame.get("flags") or {}
     operational = frame.get("operational") or {}
@@ -2536,6 +2551,7 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
         issues.append("factory_semantic_audit:missing_production_action")
     if flags.get("prohibition") and not _has_any_target(low, ("tidak boleh", "jangan", "dilarang", "tidak diperbolehkan")):
         issues.append("factory_semantic_audit:missing_prohibition")
+    issues.extend(bundle_issue)
     if flags.get("hoist_or_load") and not _has_any_target(low, (
         # Base forms also cover me-/di- forms and the imperative an instruction
         # uses ("angkat kembali", "naikkan ke rak"), not only "mengangkat".
