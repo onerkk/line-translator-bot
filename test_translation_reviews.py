@@ -635,3 +635,18 @@ def test_tag_rule_routes_and_stays_quiet():
     lookup = {}
     reviews.apply_glossary(lookup, reviews.load_bundles())
     assert lookup["塑膠牌"]["idn"] == "tag plastik"
+
+
+def test_released_reply_and_metal_debris_rules():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def hit(text, suffix):
+        return any(c["id"].endswith(suffix) for c in store.retrieve(text, "zh", "id", limit=8))
+    for text in ("@法比恩 Fabian 放了", "已放", "剛剛放行了"):
+        assert hit(text, "fang-le-released"), text
+    for text in ("東西先放旁邊就好", "大捆的放在45B", "料放了兩天還沒包"):
+        assert not hit(text, "fang-le-released"), text
+    assert hit("地上很多鐵屑要掃", "tie-shi-metal-debris")
+    lookup = {}
+    reviews.apply_glossary(lookup, reviews.load_bundles())
+    assert lookup["鐵屎"]["idn"] == "serpihan besi"

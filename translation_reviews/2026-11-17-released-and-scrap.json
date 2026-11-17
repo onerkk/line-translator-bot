@@ -1,0 +1,86 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-17-released-and-scrap",
+ "source": "screenshot review by Claude, 研磨C班 11/16 21:42 – 11/17 06:34",
+ "items": [
+  {
+   "id": "fang-le-released",
+   "src": "zh",
+   "tgt": "id",
+   "source": "@EggEgg 放了",
+   "observed": "@EggEgg Sudah diletakkan.",
+   "corrected": "@EggEgg Sudah di-release.",
+   "category": "term",
+   "reason": "同事貼系統畫面說「這把麻煩一下」，班長回「放了」是「已放行」（系統資料已放行），和同一天的「已放行＝Datanya sudah di-release」是同一件事。原譯 Sudah diletakkan 是「已經放下（東西）」。",
+   "rule": {
+    "when": [
+     [
+      "放了",
+      "放行",
+      "已放",
+      "放好了",
+      "放過了"
+     ]
+    ],
+    "regex_any": [
+     "(?:^|[\\s，,：:）)])(?:已經?|都|也|剛|剛剛)?放(?:行)?(?:了|好了|過了)\\s*[。！!~～]*$",
+     "(?:^|[\\s，,：:）)])(?:已經?|都|也)?放行\\s*[。！!~～]*$",
+     "(?:^|[\\s，,：:）)])(?:已經?|都)放\\s*[。！!~～]*$"
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "單獨回覆「放了／已放／放行了」＝系統資料已放行（di-release）",
+    "context": [
+     "班長對某一把料或某筆資料簡短回覆「放了／已放／放好了／放行了」時，意思是系統裡的資料已放行：Sudah di-release（Datanya sudah di-release）。",
+     "不是把東西放下，不要譯成 diletakkan／ditaruh。"
+    ],
+    "forbidden": [
+     "diletakkan",
+     "ditaruh"
+    ]
+   }
+  },
+  {
+   "id": "tie-shi-metal-debris",
+   "src": "zh",
+   "tgt": "id",
+   "source": "@小麥（研磨股班長） 怎麼都鐵屎",
+   "observed": "@小麥（研磨股班長） Kenapa semuanya kotoran besi?",
+   "corrected": "@小麥（研磨股班長） Kenapa semuanya serpihan besi?",
+   "category": "term",
+   "reason": "「鐵屎」是台語說的鐵屑、鐵渣；原譯 kotoran besi 照字面譯成「鐵的排泄物／髒東西」，不自然。",
+   "glossary": [
+    {
+     "zh": "鐵屎",
+     "id": "serpihan besi",
+     "mode": "hard"
+    },
+    {
+     "zh": "鐵屑",
+     "id": "serpihan besi",
+     "mode": "soft"
+    }
+   ],
+   "rule": {
+    "when": [
+     [
+      "鐵屎",
+      "鐵屑",
+      "鐵渣"
+     ]
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "鐵屎／鐵屑＝serpihan besi",
+    "context": [
+     "「鐵屎」是台語的鐵屑、鐵渣（加工或研磨掉下來的金屬碎屑），譯 serpihan besi；不要照字面譯成 kotoran besi。"
+    ],
+    "forbidden": [
+     "kotoran besi"
+    ]
+   }
+  }
+ ]
+}
