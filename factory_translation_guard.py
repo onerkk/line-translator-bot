@@ -83,6 +83,14 @@ def _degroup_thousands(text: str) -> str:
     return re.sub(r"(?<![\d.,])(\d+(?:[.,]\d+)?)\s*(ribu|juta)\b", _scale, text, flags=re.I)
 
 
+def _decimal_comma_view(text: str) -> str:
+    """Indonesian writes decimals with a comma: "6,7 ton" is 6.7噸. A comma
+    followed by one or two digits is a decimal mark (three digits is thousands
+    grouping, handled above). Without this a correct "6,7 ton" was reported as
+    a missing 6.7噸 and the whole message was never delivered (2026-11-17)."""
+    return re.sub(r"(?<=\d),(?=\d{1,2}(?!\d))", ".", str(text or ""))
+
+
 class GuardConfigurationError(ValueError):
     """Raised when approved translation assets contradict each other."""
 
@@ -396,13 +404,16 @@ class FactoryTranslationGuard:
         numeric_source = (re.sub(r"(?<![\d.,])\d{1,3}(?:\.\d{3})+(?![\d,])",
                                  lambda m: m.group(0).replace(".", ""), source or "")
                           if _lang(src) == "id" else (source or ""))
+        if _lang(src) == "id":
+            numeric_source = _decimal_comma_view(numeric_source)
         for match in _NUMBER_UNIT_RE.finditer(numeric_source):
             number = _normalize_number(match.group("number"))
             unit_raw = match.group("unit")
             unit_key = unit_raw.casefold()
             if unit_key in {"ton", "噸", "吨", "公噸", "公吨", "公斤", "千克", "kg", "kilogram"} and (number, chat_operations._weight_unit(unit_key)) in limit_values:
                 continue
-            if number and number not in compact.replace(",", ".") and number not in _degroup_thousands(candidate):
+            if (number and number not in compact.replace(",", ".") and number not in _degroup_thousands(candidate)
+                    and number not in _decimal_comma_view(candidate)):
                 issues.append(f"factory_guard:quantity_number_missing:{number}{unit_raw}")
                 continue
             # Only enforce cross-language unit realization for ZH->ID. ID->ZH may

@@ -1,0 +1,110 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-18-release-bundle-and-sensor",
+ "source": "screenshot review by Claude, 研磨C班 11/17 22:04 – 11/18 02:34",
+ "items": [
+  {
+   "id": "fang-this-bundle-release",
+   "src": "zh",
+   "tgt": "id",
+   "source": "可以請她們先放這一把嗎",
+   "observed": "Bisa minta mereka taruh satu bundel ini dulu?",
+   "corrected": "Bisa minta mereka release dulu data satu bundel ini?",
+   "category": "term",
+   "reason": "同事貼的是料的 TAG，請「她們」先「放」這一把，是請對方先把這一把的系統資料放行（和「已放行」「放了」同一件事）。原譯 taruh 是把東西放下。",
+   "rule": {
+    "when": [
+     [
+      "放這",
+      "放那",
+      "放一下",
+      "先放",
+      "幫放",
+      "幫忙放",
+      "放行"
+     ]
+    ],
+    "regex_any": [
+     "放(?:行)?\\s*(?:一下)?\\s*[這这那]\\s*(?:一|幾|\\d+)?\\s*[把捆支]",
+     "[這这那]\\s*(?:一|幾|\\d+)?\\s*[把捆支][^，。,\\n]{0,8}(?:先|幫忙|幫|麻煩|可以|能不能)?放(?:行|一下)?(?:嗎|吗|好嗎|一下)?\\s*[？?。！!]*$"
+    ],
+    "unless": [
+     "放到",
+     "放在",
+     "放去",
+     "放旁邊",
+     "放地上",
+     "放這裡",
+     "放那裡",
+     "放那邊",
+     "放這邊",
+     "放上",
+     "放下",
+     "放回",
+     "放進",
+     "放入",
+     "擺放",
+     "存放"
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "「放這一把／這把先放」＝放行這一把的系統資料",
+    "context": [
+     "請人「放這一把／先放這把／這把幫忙放一下」而且沒有說放到哪裡時，是請對方在系統把這一把的資料放行：release data bundel ini（minta di-release）。",
+     "有地點（放到、放在、放旁邊…）才是把料放下。不要譯成 taruh／letakkan。"
+    ],
+    "forbidden": [
+     "taruh",
+     "letakkan",
+     "meletakkan"
+    ]
+   }
+  },
+  {
+   "id": "sensor-putus-broken",
+   "src": "id",
+   "tgt": "zh",
+   "source": "I01 sensor otomatis putus",
+   "observed": "I01 感測器會自動斷開",
+   "corrected": "I01 的自動感測器斷了。",
+   "category": "other",
+   "reason": "otomatis 是修飾 sensor（自動感測器），putus 是「斷了、斷線」的現況。原譯變成「感測器會自動斷開」，把故障回報翻成一種功能。",
+   "rule": {
+    "when": [
+     [
+      "putus",
+      "rusak",
+      "patah",
+      "lepas",
+      "copot",
+      "mati"
+     ],
+     [
+      "sensor",
+      "kabel",
+      "selang",
+      "tali",
+      "sabuk",
+      "belt",
+      "rantai",
+      "baut",
+      "sling"
+     ]
+    ],
+    "directions": [
+     "id-zh"
+    ],
+    "title": "設備零件 + putus／rusak＝故障現況（斷了／壞了）",
+    "context": [
+     "印尼同事回報「<機台> <零件> putus／rusak／patah／lepas／mati」是在報故障現況：斷了、壞了、掉了、不動了。不要譯成「會…」的功能描述。",
+     "sensor otomatis＝自動感測器（otomatis 修飾 sensor），不是「自動斷開」。"
+    ],
+    "forbidden": [
+     "會自動斷開",
+     "自動斷開"
+    ]
+   }
+  }
+ ]
+}

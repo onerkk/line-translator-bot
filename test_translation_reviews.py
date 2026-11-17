@@ -650,3 +650,31 @@ def test_released_reply_and_metal_debris_rules():
     lookup = {}
     reviews.apply_glossary(lookup, reviews.load_bundles())
     assert lookup["鐵屎"]["idn"] == "serpihan besi"
+
+
+def test_indonesian_decimal_comma_is_the_same_quantity():
+    """Real case 2026-11-17: "…改TAG 6.7噸…" was never delivered because the
+    correct Indonesian "6,7 ton" was reported as a missing 6.7噸."""
+    import app
+    src = "我有入退庫改TAG 6.7噸，今天中班麻煩入到147～149"
+    good = "Saya sudah melakukan masuk-retur gudang untuk ganti TAG sebanyak 6,7 ton. Hari ini shift tengah mohon bantu catat pemasukan gudang sampai 147–149 ton."
+    missing = lambda issues: [i for i in issues if "quantity_number_missing" in i]
+    assert missing(app._delivery_validation_issues(src, good, "zh", "id")) == []
+    assert missing(app._delivery_validation_issues(src, good.replace("6,7", "6,8"), "zh", "id"))
+    assert missing(app._delivery_validation_issues("今天入庫12.5噸", "Hari ini pemasukan gudang 125 ton.", "zh", "id"))
+    assert missing(app._delivery_validation_issues("Hari ini masuk gudang 6,7 ton", "今天入庫 6.7 噸", "id", "zh")) == []
+    assert missing(app._delivery_validation_issues("Hari ini masuk gudang 6,7 ton", "今天入庫 67 噸", "id", "zh"))
+    assert missing(app._delivery_validation_issues("目標4000噸", "Target 4.000 ton.", "zh", "id")) == []
+
+
+def test_release_this_bundle_and_broken_part_rules():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def hit(text, src, tgt, suffix):
+        return any(c["id"].endswith(suffix) for c in store.retrieve(text, src, tgt, limit=8))
+    for text in ("這把麻煩幫忙放一下", "可以先放那2把嗎"):
+        assert hit(text, "zh", "id", "fang-this-bundle-release"), text
+    for text in ("這把先放到45B", "那把放旁邊就好", "東西放這裡"):
+        assert not hit(text, "zh", "id", "fang-this-bundle-release"), text
+    assert hit("G8 kabel sensor putus", "id", "zh", "sensor-putus-broken")
+    assert not hit("Sensor sudah diganti", "id", "zh", "sensor-putus-broken")
