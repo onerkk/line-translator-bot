@@ -19631,6 +19631,11 @@ def handle_command(text, group_id, user_id=None):
                     "⚠️ Perintah ini khusus admin\n\n"
                     "(打 /whoami 取得你的 LINE ID,請管理員加你為 admin)")
 
+    if head in ("diag", "speed", "eval"):
+        # Listed in /help, but answered by the group message handler (they
+        # need the reply token / a background job). Returning the usage text
+        # here would shadow them; the admin gate above has already run.
+        return None
     if head == "help":
         # Return sentinel; caller detects this and sends Flex instead of Text
         return "__FLEX_HELP__"
@@ -36824,6 +36829,8 @@ _ADMIN_ONLY_EQ = {
     "/wo on", "/wo off",
     "/liff",
     "/clearcache",
+    # Diagnostics expose failed message text and /eval spends AI calls.
+    "/diag", "/speed", "/eval",
 }
 _ADMIN_ONLY_STARTSWITH = (
     # /wrong is intentionally open to workers; their correction stays pending

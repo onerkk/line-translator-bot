@@ -2,7 +2,7 @@
 import re
 from urllib.parse import urlencode
 
-BUILD_ID = "2026-10-21.ui105"
+BUILD_ID = "2026-11-18.ui106"
 
 
 def entry(key, chinese, category, description, indonesian, example="", *,
@@ -33,6 +33,7 @@ GUIDES = {
     "buttons": [
         ("自然、直譯、正式與回譯", "Alami, harfiah, formal & cek balik", "按譯文下方按鈕切換表達方式；回譯會把譯文翻回原語言供核對。按鈕由管理員依群組設定，超過一頁時按下一頁。", "Gunakan tombol di bawah terjemahan untuk mengganti gaya atau menerjemahkan balik. Admin mengatur tombol per grup; pilih halaman berikut jika tersedia."),
         ("分享與圖文對照", "Bagikan & gambar", "「分享」先開啟內容預覽，再由你選擇收件對象；也可複製全文。圖片下方「圖文對照」依該群組的按鈕設定顯示。", "Bagikan membuka pratinjau, lalu Anda memilih penerima. Teks lengkap juga dapat disalin. Tombol gambar mengikuti pengaturan grup."),
+        ("⚡ 常用句", "⚡ Kalimat", "按譯文下方「⚡ 常用句」，點一下送出你在此群組最常說的句子。", "Ketuk \"⚡ Kalimat\" untuk mengirim kalimat yang paling sering Anda pakai di grup ini."),
         ("作業說明與表單", "SOP & formulir", "用 /factory／/工廠 選設備或掃碼，可看中印作業說明；有連結表單時可直接填寫。必填欄位完成後提交，系統會顯示是否已填過。", "Gunakan /factory untuk memilih mesin atau memindai QR, lalu baca SOP bilingual. Buka formulir terkait, isi kolom wajib, dan kirim; status duplikat ditampilkan."),
     ],
 }
@@ -73,6 +74,9 @@ COMMANDS = [
     entry("skipadd", "略過成員", "names", "依已辨識姓名加入不翻譯名單；重名時需更完整姓名。", "Tambahkan anggota dikenal ke daftar skip; gunakan nama lengkap jika ambigu.", "/略過成員 姓名", admin=True, scope="group", usage="姓名"),
     entry("skipdel", "恢復成員", "names", "從此群組不翻譯名單移除指定成員。", "Hapus anggota dari daftar skip grup ini.", "/恢復成員 姓名", admin=True, scope="group", usage="姓名"),
     entry("skipterm", "保留詞", "names", "無參數：清單；接詞：新增；-詞 或 del 詞：刪除；clear／清空：清除此群組自訂詞。", "Tanpa isi: daftar; kata: tambah; -kata atau del kata: hapus; clear: hapus semua kata khusus grup.", "/保留詞 -產品名稱", admin=True, scope="group", usage="[詞｜-詞｜del 詞｜clear]"),
+    entry("diag", "診斷", "admin", "訊息沒翻譯時：列出此群組最近的失敗原因與版本。", "Pesan tidak diterjemahkan? Lihat penyebab terbaru dan versi bot.", "/診斷", aliases=("诊断",), admin=True, scope="group"),
+    entry("speed", "速度", "admin", "查看此群組最近的翻譯耗時；伺服器重啟後重新累計。", "Lihat waktu terjemahan terbaru di grup ini.", "/速度", admin=True, scope="group"),
+    entry("eval", "評測", "admin", "用 10 題同類新句子檢查學習成效；約 2～3 分鐘，會用少量 AI 費用。", "Uji hasil belajar dengan 10 kalimat baru; 2–3 menit, sedikit biaya AI.", "/評測", aliases=("评测",), admin=True, scope="group"),
     entry("clearcache", "清除快取", "admin", "清除記憶體翻譯快取；不刪除詞庫、修正資料或紀錄。", "Hapus cache memori; glosarium dan catatan tetap tersimpan.", "/清除快取", admin=True, scope="group"),
     entry("audit", "抽檢", "admin", "私訊抽取最近 N 筆翻譯供人工核對，預設 10、最多 20。", "Di chat pribadi, ambil N terjemahan; default 10, maksimal 20.", "/抽檢 10", admin=True, scope="dm", usage="[1–20]"),
     entry("mark", "評分", "admin", "先用 /audit／/抽檢，再標記樣本編號：o／對 或 x／錯。", "Setelah /audit, tandai nomor sampel: o benar atau x salah.", "/評分 1 對", admin=True, scope="dm", usage="編號 o｜x"),
@@ -189,7 +193,7 @@ def command_row(row, lang, category):
                        "data": "action=help&" + urlencode(dict(topic="cmd:" + row["key"], lang=lang))},
             "contents": [
                 {"type": "box", "layout": "vertical", "width": "4px", "backgroundColor": accent, "contents": []},
-                {"type": "text", "wrap": True, "margin": "md", "flex": 1, "size": "sm", "contents": [
+                {"type": "text", "wrap": True, "margin": "md", "size": "sm", "contents": [
                     {"type": "span", "text": names, "weight": "bold", "color": BRAND},
                     {"type": "span", "text": "\n" + meaning, "size": "xs", "color": "#526577"}]}]}
 
