@@ -1,0 +1,49 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-18-grinding-removal",
+ "source": "screenshot review by Claude, 研磨股印尼群 11/18 07:00",
+ "items": [
+  {
+   "id": "grinding-removal-per-pass",
+   "src": "zh",
+   "tgt": "id",
+   "source": "再強調一次，研磨單次的研磨量不要低於0.04mm 除非特殊鋼種或是大尺寸有其他原因，粗磨0.01～0.02mm是在浪費時間",
+   "observed": "Saya tegaskan lagi, jumlah material yang digerinda setiap kali jangan kurang dari 0.04mm. Kecuali ada alasan lain untuk grade baja khusus atau material berukuran besar, penggerindaan kasar 0.01～0.02mm hanya membuang waktu.",
+   "corrected": "Saya tegaskan lagi: pengurangan ukuran setiap sekali gerinda jangan kurang dari 0.04mm, kecuali ada alasan lain seperti grade baja khusus atau ukuran besar. Gerinda kasar yang hanya mengurangi 0.01～0.02mm itu membuang waktu.",
+   "category": "term",
+   "reason": "「研磨量」是每磨一次磨掉多少尺寸（mm），原譯 jumlah material yang digerinda 像是「磨了多少料」。另外「除非…」是在限定前一句（不要低於0.04mm），原譯把它接到後一句。",
+   "glossary": [
+    {
+     "zh": "研磨量",
+     "id": "pengurangan ukuran per sekali gerinda",
+     "mode": "soft"
+    }
+   ],
+   "rule": {
+    "when": [
+     [
+      "研磨量",
+      "磨削量",
+      "切削量",
+      "單次研磨",
+      "一次磨",
+      "每次磨",
+      "磨掉",
+      "吃刀"
+     ]
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "研磨量＝每次磨掉的尺寸（mm），不是料的數量",
+    "context": [
+     "「研磨量／磨削量／單次研磨量」是每磨一次減少多少尺寸（單位 mm）：pengurangan ukuran setiap sekali gerinda（pemakanan）。不要譯成 jumlah material（料的數量）。",
+     "「不要低於 X，除非…」的「除非」限定的是前面那句，印尼文用「…, kecuali …」接在同一句後面，不要另起一句接到後面的內容。"
+    ],
+    "forbidden": [
+     "jumlah material yang digerinda"
+    ]
+   }
+  }
+ ]
+}

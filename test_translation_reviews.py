@@ -678,3 +678,13 @@ def test_release_this_bundle_and_broken_part_rules():
         assert not hit(text, "zh", "id", "fang-this-bundle-release"), text
     assert hit("G8 kabel sensor putus", "id", "zh", "sensor-putus-broken")
     assert not hit("Sensor sudah diganti", "id", "zh", "sensor-putus-broken")
+
+
+def test_grinding_removal_rule_routes_and_stays_quiet():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def hit(text):
+        return any(c["id"].endswith("grinding-removal-per-pass") for c in store.retrieve(text, "zh", "id", limit=8))
+    assert hit("精磨的研磨量控制在0.02mm")
+    assert hit("這支每次磨太少，一次磨0.05")
+    assert not hit("研磨C班今天入庫150噸")
