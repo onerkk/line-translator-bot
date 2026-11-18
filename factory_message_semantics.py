@@ -444,9 +444,13 @@ _ZH_RELEASE_OBJECT_RE = re.compile(
     r"(?P<object>把|捆|批|(?:張|张|筆|笔|個|个)?(?:工單|工单|單|单|資料|资料|數據|数据))"
     r"(?=$|[\s,，。.!！?？:：;；()（）\[\]{}]|"
     r"(?:麻煩|麻烦|拜託|拜托|請|请|幫忙|帮忙|幫|帮|協助|协助|叫|讓|让|"
-    r"都|全都|先|再|要|需|已經|已经|已|放|還|还|尚|未|沒|没|無|无|不|異常|异常|可|能))",
+    r"都|全都|先|再|要|需|已經|已经|已|放|還|还|尚|未|沒|没|無|无|不|異常|异常|可|能|嗎|吗|呢|吧|喔|哦))",
     re.I,
 )
+# 「有包的優先放」「不然會放到沒包的那些」: the packed / unpacked bundles are the
+# release object even though no measure word (把/捆) is written (2026-11-19).
+_ZH_RELEASE_PACKED_OBJECT_RE = re.compile(
+    r"(?:有|沒|没|未|已|還沒|还没)(?:包|打包|包裝|包装)(?:好|完)?的(?:那些|這些|这些|那幾把|這幾把)?")
 _ZH_RELEASE_REQUEST_RE = re.compile(
     r"(?:麻煩|麻烦|拜託|拜托|請|请|幫忙|帮忙|幫|帮|協助|协助|叫|讓|让)",
     re.I,
@@ -457,7 +461,7 @@ _ZH_RELEASE_COMPLETED_RE = re.compile(
 )
 _ZH_RELEASE_PHYSICAL_RE = re.compile(
     r"(?:放不下|放不進|放不进|放得下|放得進|放得进|能放就放|不夠放|不够放|"
-    r"放在|放到|放進|放进|放入|放下|放回|擺在|摆在|擺到|摆到|"
+    r"放在|放到(?!(?:沒|没|有|已|未|還沒|还没)?(?:包|打包)|那些|這些|这些|別的|别的|其他)|放進|放进|放入|放下|放回|擺在|摆在|擺到|摆到|"
     r"儲格|储格|儲位|储位|置料|位置|地方|地上|旁邊|旁边|上面|下面|"
     r"架上|桌上|這裡|这里|那裡|那里|照片|圖片|图片|空間|空间)",
     re.I,
@@ -1610,7 +1614,9 @@ def _release_mode(prefix: str, suffix: str, lang: str) -> str:
             ("prohibited", r"禁止|不可以|不可|不得|不准|不要|勿|別|别"),
             ("unable", r"無法|无法|不能|沒辦法|没办法|未能|不成功|失敗|失败"),
             ("pending", r"尚未|還未|还未|還沒(?:有)?|还没(?:有)?|沒有|没有|未|沒|没"),
-            ("negative", r"不"),
+            # 不然／不過／不管… are conjunctions, not a negated release
+            # (「不然可能會放到沒包的那些」 = otherwise they may release the wrong ones).
+            ("negative", r"不(?!然|過|过|管|同|只|但|論|论|如|少|久)"),
             ("completed", r"已經|已经|已"),
             ("request", r"麻煩|麻烦|拜託|拜托|請|请|幫忙|帮忙|幫|帮|協助|协助"),
         ),
@@ -1621,7 +1627,8 @@ def _release_mode(prefix: str, suffix: str, lang: str) -> str:
             ("pending", r"\b(?:belum|blm)\b"),
             ("negative", r"\b(?:tidak|tdk|gak)\b"),
             ("completed", r"\b(?:sudah|sdh|telah|berhasil|selesai)\b"),
-            ("request", r"\b(?:tolong|mohon|harap|silakan)\b"),
+            # "minta (mereka) …" = ask someone to do it: a request, like tolong.
+            ("request", r"\b(?:tolong|mohon|harap|silakan|minta)\b"),
         ),
     }
     hits = [(m.end(), len(m.group()), -rank, mode)
@@ -1658,10 +1665,12 @@ def _release_source_relations(visible: str) -> list[dict]:
             continue
         if "放行" not in clause and _ZH_RELEASE_PHYSICAL_OBJECT_RE.search(clause):
             continue
-        objects = _ZH_RELEASE_OBJECT_RE.search(clause)
+        objects = _ZH_RELEASE_OBJECT_RE.search(clause) or _ZH_RELEASE_PACKED_OBJECT_RE.search(clause)
         if "放行" not in clause and not objects:
             continue
-        actions = list(re.finditer(r"放行|放(?=一下|了|好|完|這|这|那|\Z)", clause))
+        actions = list(re.finditer(
+            r"放行|放(?=一下|了|好|完|這|这|那|\Z|到(?:沒|没|有|已|未|還沒|还没)?(?:包|打包)|到(?:那些|這些|这些|別的|别的|其他))",
+            clause))
         # The short imperative can end after its object (放這張工單).
         previous_end = 0
         for index, action in enumerate(actions):

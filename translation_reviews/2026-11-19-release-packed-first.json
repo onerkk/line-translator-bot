@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "review_id": "2026-11-19-release-packed-first",
+  "source": "screenshot review by Claude, 研磨C班 11/18–11/19",
+  "items": [
+    {
+      "id": "packed-ones-release-first",
+      "src": "zh",
+      "tgt": "id",
+      "source": "剛剛包的65mm看要不要ID抄給我，我叫他們有包的優先放，不然可能會放到沒包的那些",
+      "observed": "Untuk 65mm yang baru saja dikemas, coba lihat apakah ID-nya perlu dicatat dan dikirim kepada saya. Saya akan minta mereka memprioritaskan yang sudah dikemas, kalau tidak mungkin akan ditaruh bersama yang belum dikemas.",
+      "corrected": "Untuk bundel 65mm yang baru saja dikemas, kalau bisa catat ID-nya dan kirim ke saya. Saya akan minta mereka release data yang sudah dikemas lebih dulu; kalau tidak, bisa-bisa data yang belum dikemas yang ter-release.",
+      "category": "term",
+      "reason": "抄 ID 給我＋叫他們「有包的優先放」＝請對方先放行已包裝那幾把的系統資料；「放到沒包的那些」＝不小心放行到還沒包的資料，不是把料放在一起。",
+      "rule": {
+        "when": [
+          [
+            "有包的",
+            "沒包的",
+            "没包的",
+            "包好的",
+            "已包的"
+          ],
+          [
+            "放"
+          ]
+        ],
+        "regex_any": [
+          "(?:有|沒|没|已|未)包(?:好)?的[^，。,\\n]{0,6}(?:優先|优先|先)放(?![到在旁上下進进入回])",
+          "放到(?:沒|没|未|還沒|还没)包的"
+        ],
+        "unless": [
+          "放在",
+          "放旁邊",
+          "放旁边",
+          "放架",
+          "放地上",
+          "放這裡",
+          "放那裡",
+          "放回"
+        ],
+        "directions": [
+          "zh-id"
+        ],
+        "title": "「有包的優先放／放到沒包的」＝放行已包裝的資料",
+        "context": [
+          "抄 ID、叫人「有包的優先放」是在系統放行（release）已包裝那幾把的資料；「不然會放到沒包的」＝怕放行到還沒包的。",
+          "不要譯成 taruh／letakkan／ditaruh bersama（實體擺放）。"
+        ],
+        "forbidden": [
+          "ditaruh bersama",
+          "taruh bersama",
+          "diletakkan bersama"
+        ]
+      }
+    }
+  ]
+}

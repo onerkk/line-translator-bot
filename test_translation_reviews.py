@@ -688,3 +688,27 @@ def test_grinding_removal_rule_routes_and_stays_quiet():
     assert hit("精磨的研磨量控制在0.02mm")
     assert hit("這支每次磨太少，一次磨0.05")
     assert not hit("研磨C班今天入庫150噸")
+
+
+def test_2026_11_19_packed_first_release_is_data_release_not_placement():
+    import app
+    src = "剛剛包的65mm看要不要ID抄給我，我叫他們有包的優先放，不然可能會放到沒包的那些"
+    bad = ("Untuk 65mm yang baru saja dikemas, coba lihat apakah ID-nya perlu dicatat dan dikirim kepada saya. "
+           "Saya akan minta mereka memprioritaskan yang sudah dikemas, kalau tidak mungkin akan ditaruh bersama yang belum dikemas.")
+    good = ("Untuk bundel 65mm yang baru saja dikemas, kalau bisa catat ID-nya dan kirim ke saya. Saya akan minta mereka "
+            "release data yang sudah dikemas lebih dulu; kalau tidak, bisa-bisa data yang belum dikemas yang ter-release.")
+    assert any("erp_data_release_relation_missing" in i for i in app._delivery_validation_issues(src, bad, "zh", "id"))
+    assert app._delivery_validation_issues(src, good, "zh", "id") == []
+
+
+def test_2026_11_19_physical_placement_with_location_stays_placement():
+    import factory_message_semantics as fms
+    for text in ("這把先放到45B", "有包的先放旁邊", "那把放在架上就好", "包好的放到架上"):
+        frame = fms.build_data_release_frame(text)
+        assert not (frame or {}).get("active"), text
+
+
+def test_2026_11_19_conjunction_buran_is_not_negation_and_minta_is_request():
+    import factory_message_semantics as fms
+    assert fms._release_mode("", "不然可能會", "zh") != "negative"
+    assert fms._release_mode("Saya akan minta mereka ", "", "id") == "request"
