@@ -2,7 +2,7 @@
 import re
 from urllib.parse import urlencode
 
-BUILD_ID = "2026-11-18.ui106"
+BUILD_ID = "2026-11-19.ui107"
 
 
 def entry(key, chinese, category, description, indonesian, example="", *,
@@ -77,6 +77,7 @@ COMMANDS = [
     entry("diag", "診斷", "admin", "訊息沒翻譯時：列出此群組最近的失敗原因與版本。", "Pesan tidak diterjemahkan? Lihat penyebab terbaru dan versi bot.", "/診斷", aliases=("诊断",), admin=True, scope="group"),
     entry("speed", "速度", "admin", "查看此群組最近的翻譯耗時；伺服器重啟後重新累計。", "Lihat waktu terjemahan terbaru di grup ini.", "/速度", admin=True, scope="group"),
     entry("eval", "評測", "admin", "用 10 題同類新句子檢查學習成效；約 2～3 分鐘，會用少量 AI 費用。", "Uji hasil belajar dengan 10 kalimat baru; 2–3 menit, sedikit biaya AI.", "/評測", aliases=("评测",), admin=True, scope="group"),
+    entry("compare", "比較", "admin", "同一批難句讓各模型翻，比錯幾句、速度、費用；約 5～10 分鐘。", "Bandingkan model: salah, kecepatan, biaya; 5–10 menit.", "/比較", aliases=("比较",), admin=True, scope="group"),
     entry("clearcache", "清除快取", "admin", "清除記憶體翻譯快取；不刪除詞庫、修正資料或紀錄。", "Hapus cache memori; glosarium dan catatan tetap tersimpan.", "/清除快取", admin=True, scope="group"),
     entry("audit", "抽檢", "admin", "私訊抽取最近 N 筆翻譯供人工核對，預設 10、最多 20。", "Di chat pribadi, ambil N terjemahan; default 10, maksimal 20.", "/抽檢 10", admin=True, scope="dm", usage="[1–20]"),
     entry("mark", "評分", "admin", "先用 /audit／/抽檢，再標記樣本編號：o／對 或 x／錯。", "Setelah /audit, tandai nomor sampel: o benar atau x salah.", "/評分 1 對", admin=True, scope="dm", usage="編號 o｜x"),

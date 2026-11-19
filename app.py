@@ -16447,6 +16447,35 @@ def _guard_exact_eval_aware(*args, **kwargs):
 
 factory_translation_guard_module.exact_verified_target = _guard_exact_eval_aware
 _LEARNING_EVAL_STATE = {"running": False, "last": None}
+_MODEL_COMPARE_STATE = {"running": False, "last": None}
+
+
+def _run_model_compare_and_push(group_id, limit=20):
+    """Background job for /比較: same hard sentences through each model, then push the table."""
+    import model_compare_live
+    try:
+        import sys as _sys_cmp
+        report = model_compare_live.run(_sys_cmp.modules[__name__], limit=limit)
+        _MODEL_COMPARE_STATE["last"] = report
+        text = model_compare_live.summary_text(report, os.environ.get("RENDER_GIT_COMMIT", "")[:7])
+        try:
+            _event_log_write("model_compare", {"version": report.get("version"), "cases": report.get("cases"),
+                                               "summary": [{k: s.get(k) for k in ("key", "n", "wrong", "avg_seconds",
+                                                            "p90_seconds", "cost_usd", "twd_per_1000", "models",
+                                                            "wrong_items")} for s in report.get("summary", [])]})
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.exception("[ModelCompare] failed")
+        text = f"🧪 模型比較失敗：{type(exc).__name__}"
+    finally:
+        _MODEL_COMPARE_STATE["running"] = False
+    try:
+        with ApiClient(configuration) as api_client:
+            MessagingApi(api_client).push_message(PushMessageRequest(
+                to=group_id, messages=[TextMessage(text=_clip_line_text(text))]))
+    except Exception:
+        logger.exception("[ModelCompare] push failed")
 
 
 def _run_learning_eval_and_push(group_id, limit=10):
@@ -19631,7 +19660,7 @@ def handle_command(text, group_id, user_id=None):
                     "⚠️ Perintah ini khusus admin\n\n"
                     "(打 /whoami 取得你的 LINE ID,請管理員加你為 admin)")
 
-    if head in ("diag", "speed", "eval"):
+    if head in ("diag", "speed", "eval", "compare"):
         # Listed in /help, but answered by the group message handler (they
         # need the reply token / a background job). Returning the usage text
         # here would shadow them; the admin gate above has already run.
@@ -20519,6 +20548,23 @@ def handle_message(event):
     if group_id and not is_dm:
         # 1. 打「設定」「語言」直接開設定面板(參考 JFETEK 面板 / Ligo 指令的痛點:
         #    工人記不住指令,給一個最自然的中文入口)
+        _cmp_match = re.fullmatch(r"/compare(?:\s+(\d{1,3}))?",
+                                  line_command_catalog.normalize_command(text.strip()).strip())
+        if _cmp_match and is_group_admin(getattr(source, "user_id", None)):
+            # Same reviewed hard sentences through every configured model:
+            # mistakes, seconds and cost side by side (runs in the background).
+            _n = max(5, min(60, int(_cmp_match.group(1) or 20)))
+            if _MODEL_COMPARE_STATE["running"]:
+                _msg = "🧪 模型比較進行中，完成後會把結果傳到這個群組。"
+            else:
+                _MODEL_COMPARE_STATE["running"] = True
+                threading.Thread(target=_run_model_compare_and_push, args=(group_id, _n), daemon=True).start()
+                _msg = (f"🧪 開始模型比較（{_n} 題 × 每個可用模型，約 {max(3, _n // 3)}～{max(6, _n // 2)} 分鐘），"
+                        "完成後會把結果傳到這個群組。")
+            with ApiClient(configuration) as api_client:
+                MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token, messages=[TextMessage(text=_msg)]))
+            return
         if text.strip() in ("/評測", "/评测", "/eval") and is_group_admin(getattr(source, "user_id", None)):
             # Measures whether a taught mistake recurs on NEW sentences of the same
             # kind (about 50 calls to the cheapest model; runs in the background).
@@ -36830,9 +36876,11 @@ _ADMIN_ONLY_EQ = {
     "/liff",
     "/clearcache",
     # Diagnostics expose failed message text and /eval spends AI calls.
-    "/diag", "/speed", "/eval",
+    "/diag", "/speed", "/eval", "/compare",
 }
 _ADMIN_ONLY_STARTSWITH = (
+    # /比較 N spends AI calls on several models.
+    "/compare",
     # /wrong is intentionally open to workers; their correction stays pending
     # until an admin approves it and therefore cannot poison translation memory.
     "/export",

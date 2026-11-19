@@ -121,6 +121,10 @@ import prompt_optimizer
 _TRANSLATION_REQUEST = ContextVar("translation_request_budget", default=None)
 _TRANSPORT_SCOPE = ContextVar("provider_transport_scope", default=None)
 _USAGE_OBSERVER = None
+# Model comparison (/比較): pin every call in this context to one provider and
+# model, and/or collect per-call cost and latency.  Unset in live traffic.
+_FORCED_ROUTE = ContextVar("forced_provider_route", default=None)
+_CALL_RECORDER = ContextVar("provider_call_recorder", default=None)
 
 
 def set_usage_observer(observer):
@@ -2806,6 +2810,14 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
     if not (_current_config or {}).get("provider_failover", True) and probe is None:
         active = get_active_provider()
         providers = [active] if active in providers else providers[:1]
+    forced_route = _FORCED_ROUTE.get()
+    if forced_route and probe is None:
+        forced_provider, forced_model = forced_route
+        # The comparison pins one provider even when live failover is off.
+        if forced_provider not in get_available_providers(required_capability, include_open_circuits=True):
+            raise RuntimeError(forced_provider + " is not available for this comparison")
+        providers = [forced_provider]
+        model = forced_model
     provider = providers[0]
     seconds = max(0.1, min(float(timeout or 90), total, per_provider))
     budget = _TRANSLATION_REQUEST.get()
@@ -2826,6 +2838,10 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
             reasoning_effort=reasoning_effort, verbosity=verbosity, logprobs=logprobs,
             top_logprobs=top_logprobs, logit_bias=logit_bias, stop=stop, **kwargs)
     except Exception as exc:
+        _recorder = _CALL_RECORDER.get()
+        if _recorder is not None:
+            _recorder.append({"provider": provider, "model": str(model or ""), "cost_usd": 0.0,
+                              "seconds": time.monotonic() - started, "error": type(exc).__name__})
         if _is_quota_exhausted_error(exc, provider=provider) and probe is None:
             _auto_switch_on_exhaust(provider, exc)  # selects a route for future messages only
         if _is_provider_failover_error(exc):
@@ -2843,6 +2859,12 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
             _USAGE_OBSERVER(response)
         except Exception as exc:
             logging.getLogger("app").warning("AI usage observer failed: %s", type(exc).__name__)
+    _recorder = _CALL_RECORDER.get()
+    if _recorder is not None:
+        _delta = getattr(response, "_jy_usage_delta", None) or {}
+        _recorder.append({"provider": provider,
+                          "model": str(_delta.get("model") or getattr(response, "model", "") or model or ""),
+                          "cost_usd": float(_delta.get("cost_usd") or 0.0), "seconds": elapsed, "error": ""})
     response = _restore_provider_privacy(response, envelope, structured=bool(kwargs.get("structured_schema")))
     response = _strip_leaked_wrappers(response, messages, structured=bool(kwargs.get("structured_schema")))
     issues = []

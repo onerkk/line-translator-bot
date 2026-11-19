@@ -1,0 +1,194 @@
+"""In-bot model comparison (/比較): which model translates our hard sentences best,
+how fast, and at what cost?
+
+The exam uses the reviewed cases (translation_reviews/*.json): every one is a
+sentence the bot once got wrong, with the reviewer's corrected meaning.  To keep
+memory from answering, each case is first rewritten into a NEW sentence of the
+same kind (same tricky point, other numbers / names / wording).  Every model
+then translates the same new sentences through the real pipeline, with all
+learned knowledge available (like live traffic) but no cache or memory lookups.
+
+Each call in a translation is pinned to the model under test and recorded, so
+cost and seconds are what that model actually spent.  One fixed judge, blind
+to which model wrote the output, decides whether the translation would mislead
+a worker.  Nothing is written to any learning or memory store and no LINE
+message is sent from here.
+"""
+from __future__ import annotations
+
+import json
+import statistics
+import time
+from typing import Any, Callable, Dict, List, Optional
+
+import ai_provider
+import learning_eval_live
+
+COMPARE_VERSION = "2026-11-19.1"
+USD_TO_TWD = 32.0
+
+# (key, label, provider, model).  provider None = the live routing as configured.
+CONFIGS = (
+    ("current", "現行設定", None, None),
+    ("gpt-6.1-sol", "GPT-6.1 Sol", "openai", "gpt-6.1-sol"),
+    ("claude-haiku-5-5", "Claude Haiku 5.5", "anthropic", "claude-haiku-5-5"),
+    ("claude-sonnet-5-5", "Claude Sonnet 5.5", "anthropic", "claude-sonnet-5-5"),
+    ("gemini-2.5-flash", "Gemini 2.5 Flash", "gemini", "gemini-2.5-flash"),
+)
+
+JUDGE_PROMPT = """You check machine translations for a Taiwan stainless-steel factory LINE group
+(Traditional Chinese <-> Indonesian). Workers act on these translations.
+
+Background - a reviewer once found this kind of mistake in a similar message:
+Earlier message: %s
+Wrong translation: %s
+Correct translation: %s
+Reviewer's reason: %s
+
+Now judge THIS translation of a DIFFERENT message:
+Message: %s
+Translation: %s
+
+Is the translation correct enough that a worker would understand and act correctly?
+Mark it wrong if it gets wrong (or drops) the action, the object, a number or unit,
+who / which station, negation, a request vs a statement, time, or the kind of trap
+described above. Ignore style and word choice that keeps the meaning.
+Reply with JSON only: {"correct": true or false, "error": "<if wrong: what is wrong, in Traditional Chinese, under 20 characters>"}"""
+
+
+def available_configs(has_key: Optional[Callable[[str], bool]] = None,
+                      blocked: Optional[Callable[[str], bool]] = None) -> List[tuple]:
+    return [c for c, _why in _config_status(has_key, blocked) if not _why]
+
+
+def skipped_configs(has_key=None, blocked=None) -> List[tuple]:
+    return [(c[1], why) for c, why in _config_status(has_key, blocked) if why]
+
+
+def _config_status(has_key=None, blocked=None):
+    has_key = has_key or ai_provider._provider_has_key
+    blocked = blocked or ai_provider._provider_quota_blocked
+    out = []
+    for cfg in CONFIGS:
+        provider = cfg[2]
+        why = ""
+        if provider is not None and not has_key(provider):
+            why = "沒有設定金鑰"
+        elif provider is not None and blocked(provider):
+            why = "額度用完"
+        out.append((cfg, why))
+    return out
+
+
+def translate_with(app, text: str, src: str, tgt: str, provider: Optional[str], model: Optional[str]) -> Dict[str, Any]:
+    calls: List[Dict[str, Any]] = []
+    rec_token = ai_provider._CALL_RECORDER.set(calls)
+    route_token = ai_provider._FORCED_ROUTE.set((provider, model) if provider else None)
+    started = time.monotonic()
+    try:
+        output = learning_eval_live.translate_text(app, text, src, tgt, hide_learning=False)
+    finally:
+        ai_provider._FORCED_ROUTE.reset(route_token)
+        ai_provider._CALL_RECORDER.reset(rec_token)
+    errors = [c["error"] for c in calls if c.get("error")]
+    if provider and not any(not c.get("error") for c in calls):
+        # The model under test never answered; whatever came back is a
+        # fallback (e.g. public NMT) and must not be scored as its work.
+        output = "[error: " + (errors[0] if errors else "no call to the model") + "]"
+    return {"output": output, "seconds": time.monotonic() - started,
+            "cost_usd": sum(c.get("cost_usd", 0.0) for c in calls),
+            "models": sorted({c["model"] for c in calls if c.get("model") and not c.get("error")}),
+            "calls": len(calls), "errors": errors}
+
+
+def judge(app, case: Dict[str, Any], variant: str, output: str, model: str) -> Dict[str, Any]:
+    try:
+        text = learning_eval_live._ask(app, model, JUDGE_PROMPT % (
+            case["source"], case["original"] or "(not recorded)", case["corrected"],
+            case["reason"] or "(none)", variant, output), 160)
+        start, end = text.find("{"), text.rfind("}")
+        data = json.loads(text[start:end + 1])
+        return {"correct": bool(data.get("correct")), "error": str(data.get("error") or "")[:40]}
+    except Exception as exc:
+        return {"correct": None, "error": f"judge error: {type(exc).__name__}"}
+
+
+def run(app, limit: int = 20, seed: Optional[int] = None, judge_model: Optional[str] = None,
+        variant_model: Optional[str] = None, configs: Optional[List[tuple]] = None,
+        variant_fn=None, translate_fn=None, judge_fn=None) -> Dict[str, Any]:
+    variant_fn = variant_fn or learning_eval_live.make_variant
+    translate_fn = translate_fn or translate_with
+    judge_fn = judge_fn or judge
+    skipped_models = [] if configs else skipped_configs()
+    configs = list(configs or available_configs())
+    judge_model = judge_model or ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
+    variant_model = variant_model or app.pick_model("評分")
+    cases, skipped = [], 0
+    for case in learning_eval_live.load_cases(limit, seed):
+        variant = variant_fn(app, case, variant_model)
+        if variant:
+            cases.append((case, variant))
+        else:
+            skipped += 1
+    per: Dict[str, Dict[str, Any]] = {key: {"label": label, "rows": []} for key, label, _p, _m in configs}
+    for case, variant in cases:
+        for key, _label, provider, model in configs:
+            res = translate_fn(app, variant, case["src_lang"], case["tgt_lang"], provider, model)
+            out = res.get("output") or ""
+            if not out or out.startswith("[error"):
+                verdict = {"correct": False, "error": "模型沒有回應" if out.startswith("[error") else "沒有譯文"}
+            else:
+                verdict = judge_fn(app, case, variant, out, judge_model)
+            per[key]["rows"].append({"id": case["item_id"], "variant": variant, **res, **verdict})
+    summary = []
+    for key, label, provider, model in configs:
+        rows = per[key]["rows"]
+        scored = [r for r in rows if r.get("correct") is not None]
+        secs = [r["seconds"] for r in rows]
+        cost = sum(r.get("cost_usd", 0.0) for r in rows)
+        models: Dict[str, int] = {}
+        for r in rows:
+            for m in r.get("models", []):
+                models[m] = models.get(m, 0) + 1
+        summary.append({
+            "key": key, "label": label, "n": len(rows), "scored": len(scored),
+            "wrong": sum(1 for r in scored if not r["correct"]),
+            "avg_seconds": round(statistics.mean(secs), 2) if secs else 0.0,
+            "p90_seconds": round(sorted(secs)[max(0, int(len(secs) * 0.9) - 1)], 2) if secs else 0.0,
+            "cost_usd": cost,
+            "twd_per_1000": round(cost / len(rows) * 1000 * USD_TO_TWD, 1) if rows else 0.0,
+            "models": models,
+            "wrong_items": [(r["id"], r.get("error", "")) for r in scored if not r["correct"]],
+        })
+    return {"version": COMPARE_VERSION, "ts": int(time.time()), "cases": len(cases), "skipped": skipped,
+            "judge_model": judge_model, "summary": summary, "rows": per,
+            "skipped_models": skipped_models}
+
+
+def summary_text(report: Dict[str, Any], version: str = "") -> str:
+    n = report.get("cases", 0)
+    if not n or not report.get("summary"):
+        return "🧪 模型比較：沒有可用的題目（AI 呼叫失敗或沒有審核資料）。"
+    lines = [f"🧪 模型比較（{n} 題，版本 {version or '?'}）",
+             "考法：把以前翻錯過的句子改寫成同類新句子，每個模型翻同一批，由同一個評審判斷會不會讓人誤會。",
+             ""]
+    marks = "①②③④⑤⑥⑦⑧"
+    for i, s in enumerate(report["summary"]):
+        rate = f"{s['wrong']}/{s['scored']}" if s["scored"] else "—"
+        lines.append(f"{marks[i] if i < len(marks) else '•'} {s['label']}：錯 {rate}｜平均 {s['avg_seconds']} 秒"
+                     f"（慢的 {s['p90_seconds']} 秒）｜每千句約 NT${s['twd_per_1000']}")
+        if s["key"] == "current" and s["models"]:
+            lines.append("　實際用到：" + "、".join(f"{m}×{c}" for m, c in
+                                                sorted(s["models"].items(), key=lambda kv: -kv[1])[:3]))
+        for item_id, err in s["wrong_items"][:3]:
+            lines.append(f"　✗ {item_id}：{err}")
+    best = min(s["wrong"] for s in report["summary"] if s["scored"]) if any(s["scored"] for s in report["summary"]) else None
+    if best is not None:
+        close = [s for s in report["summary"] if s["scored"] and s["wrong"] <= best + 1]
+        cheapest = min(close, key=lambda s: s["twd_per_1000"])
+        lines += ["", f"錯最少：{best} 題。錯得差不多（最多多錯 1 題）裡最便宜的是 {cheapest['label']}。",
+                  "題數少時 1～2 題的差距可能是運氣，要確定可以再跑一次（會抽到別的題目）。"]
+    if report.get("skipped_models"):
+        lines.append("沒測：" + "、".join(f"{label}（{why}）" for label, why in report["skipped_models"]))
+    lines.append(f"評審模型：{report.get('judge_model', '?')}；跳過 {report.get('skipped', 0)} 題（改寫失敗）")
+    return "\n".join(lines)
