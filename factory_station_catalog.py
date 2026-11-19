@@ -16,9 +16,10 @@ from pathlib import Path
 import re
 import unicodedata
 
+import conversation_context
 import translation_mentions
 
-BUILD_ID = "2026-10-17.1-catalog-abbreviation-retrieval"
+BUILD_ID = "2026-11-19.1-evidence-bound-numbers"
 _PATH = Path(__file__).with_name("factory_station_data.json")
 
 
@@ -112,8 +113,73 @@ def _prose(text):
                   lambda match: " " * len(match.group()), value)
 
 
-def _is_value(text, start, end):
+_BA_OBJECT = re.compile(
+    r"(?:[這这那此該该](?:些|幾|几|批|捆|個|个|[一二兩两三四五六七八九十\d])"
+    r"|(?:[這这那]?\s*(?:[一二兩两三四五六七八九十百幾几]+|\d+)\s*[捆把支條条根件批箱包台])"
+    r"|它[們们]?(?:都|也|全|先|就|要|$))")
+_BA_MARKER = re.compile(r"\s*把\s*")
+_BA_COUNT_CUE = re.compile(
+    r"(?:[總总]共|[總总合]計|[总總]數|[总總]数|數量|数量|一共|只有|還有|还有|剩下?|共|"
+    r"各有|[约約有領领收]|[這这那每第])\s*(?:為|为|是|[:：=])?\s*$")
+_STATION_NUMBERS = frozenset(str(row["no"]) for row in STATION_NAMES.values() if row["no"] is not None) | frozenset(
+    str(row["station"]) for row in STATION_CODES.values())
+
+
+def ba_antecedent(source):
+    """Use only the selected original, never a translation or another thread."""
+    if "把" not in str(source) or not re.search(r"\d\s*把", str(source)):
+        return ""
+    snapshot = conversation_context.current_for(source) or {}
+    turns = snapshot.get("entries") or []
+    previous = str(turns[-1]["text"]) if turns else ""
+    return "" if re.search(r"[?？]|不是|並非|并非|還是|还是|\b(?:bukan|atau)\b", previous, re.I) else previous
+
+
+def number_ba_role(text, start, end, antecedent=""):
+    """Classify one number immediately before 把 from evidence at that occurrence."""
+    marker = _BA_MARKER.match(text, end)
+    if not marker:
+        return ""
+    number = text[start:end]
+    before = text[max(0, start - 32):start]
+    if re.search(r"[A-Za-z0-9_#×Ø]$", before):
+        return "embedded"
+    if _BA_COUNT_CUE.search(before):
+        return "count"
+    # Independent quantity inside the object survives arbitrary relative clauses.
+    # A list/conjunction cannot transfer that quantity to the preceding number.
+    clause = re.split(r"[，,。；;、！？!?\n]|以及|另外|加上|還有|还有",
+                      text[marker.end():], maxsplit=1)[0].strip()
+    object_phrase = re.split(r"[與与和跟]", clause, maxsplit=1)[0]
+    if _BA_OBJECT.match(clause) or any(
+        _BA_OBJECT.match(object_phrase, modifier.end()) for modifier in re.finditer(r"的\s*", object_phrase)
+    ):
+        return "actor"
+    if not number.isdecimal():
+        return "count"
+    code = re.escape(number)
+    if re.search(r"(?:站號|站号|站別|站别|站)\s*$", before):
+        return "actor"
+    if antecedent:
+        station = re.search(rf"(?<![\w.])(?:stasiun|station|pos|orang)\s+{code}(?!\d)"
+                            rf"|(?<![\d.]){code}\s*(?:站|的人|那邊|那边)", antecedent, re.I)
+        count = re.search(rf"(?<!\d){code}\s*(?:捆|bundel\b|ikat\b)|"
+                          rf"(?:共|數量|数量)\s*{code}\s*把", antecedent, re.I)
+        if station and not count:
+            return "actor"
+        if count and not station:
+            return "count"
+    # A catalog number alone cannot establish either a station or a bundle count.
+    if (number in _STATION_NUMBERS or len(number) >= 2) and clause and not re.match(r"^(?:都|共|各|半)", clause):
+        return "unresolved"
+    return "count"
+
+
+def _is_value(text, start, end, antecedent=""):
     before, after = text[max(0, start-48):start], text[end:end+32]
+    ba_role = number_ba_role(text, start, end, antecedent) if "把" in after else ""
+    if ba_role in ("actor", "unresolved") and not _OTHER_ID_LABEL.search(before):
+        return False
     return bool(_UNITS.search(after) or _QUANTITY_LABEL.search(before) or
                 _OTHER_ID_LABEL.search(before) or
                 re.search(r"[#×xX*ØøΦφ]\s*$", before) or
@@ -121,11 +187,17 @@ def _is_value(text, start, end):
                 re.search(r"\d\s*[/:-]\s*$", before))
 
 
-def _role(text, start, end, lang):
+def _role(text, start, end, lang, antecedent=""):
     # Local punctuation bounds prevent another sentence's action owning a code.
     left = _CLAUSE.split(text[:start])[-1][-70:]
     right = _CLAUSE.split(text[end:])[0][:70]
     if lang == "zh":
+        if number_ba_role(text, start, end, antecedent) == "actor":
+            predicate = re.split(r"[，,、]", right, maxsplit=1)[0].rsplit("的", 1)[-1]
+            for event, verb in _VERBS[lang].items():
+                if re.search(verb, predicate):
+                    return "actor", event
+            return "identifier", ""
         if re.search(r"(?:給|给|送(?:到|去|至|往)?|移至|轉(?:到|至)|轉交|转交|交(?:到|給|给)|放行(?:資料|资料)?(?:到|至))\s*$", left):
             return "destination", ""
         if re.search(r"(?:在|位於|位于)\s*$", left):
@@ -160,31 +232,43 @@ def _role(text, start, end, lang):
             return "actor", ""
         if re.search(r"\b(?:stasiun|station|pos)\s+(?:inspeksi\s+|pemeriksaan\s+)?$", left, re.I):
             return "identifier", ""
+        if re.search(r"\b(?:pihak|orang|petugas|operator|tim)\s+$", left, re.I) or re.match(
+                r"^\s+(?:sudah|telah|belum|akan|harus|sedang)\b", right, re.I):
+            return "identifier", ""
     return "", ""
+
+
+@lru_cache(maxsize=4)
+def _number_index(path, stamp, size):
+    data = _read(path, stamp, size)
+    numbers = {}
+    for name, row in data["names"].items():
+        if row.get("no") is not None:
+            numbers.setdefault(str(row["no"]), []).append((name, row))
+    # Some ERP numbers are documented only through their equipment rows (420
+    # in the existing asset). Do not discard these when no station-name row exists.
+    named = set(numbers)
+    for row in data["equipment"].values():
+        number = str(row["station"])
+        if number not in named:
+            numbers.setdefault(number, []).append((row["zh"], {"id": row["id"], "dept": ""}))
+    return numbers
 
 
 def station_facts(source, lang):
     """Parse station identities only where syntax, catalog and value type agree."""
     lang, text = _lang(lang), _prose(source)
-    if lang not in _VERBS:
+    if lang not in _VERBS or not _NUMBER.search(text):
         return []
-    numbers = {}
-    for name, row in catalog()["names"].items():
-        if row.get("no") is not None:
-            numbers.setdefault(str(row["no"]), []).append((name, row))
-    # Some ERP numbers are documented only through their equipment rows (420
-    # in the existing asset). Do not discard these when no station-name row exists.
-    for code, row in catalog()["equipment"].items():
-        number = str(row["station"])
-        if number not in numbers:
-            numbers[number] = [(item["zh"], {"id": item["id"], "dept": ""})
-                               for item in catalog()["equipment"].values() if str(item["station"]) == number]
+    stat = _PATH.stat()
+    numbers = _number_index(str(_PATH), stat.st_mtime_ns, stat.st_size)
     facts = []
+    antecedent = ba_antecedent(source) if lang == "zh" else ""
     for match in _NUMBER.finditer(text):
         code = match.group()
-        if code not in numbers or _is_value(text, *match.span()):
+        if code not in numbers or _is_value(text, *match.span(), antecedent):
             continue
-        role, event = _role(text, *match.span(), lang)
+        role, event = _role(text, *match.span(), lang, antecedent)
         if not role:
             continue
         rows = numbers[code]
@@ -226,7 +310,8 @@ def translation_issues(source, candidate, src, tgt):
         if fact["code"] in expected_codes:
             continue
         occurrences = list(re.finditer(r"(?<!\d)" + re.escape(fact["code"]) + r"(?!\d)", source_prose))
-        if occurrences and all(_is_value(source_prose, *match.span()) for match in occurrences):
+        prior = ba_antecedent(source) if src == "zh" else ""
+        if occurrences and all(_is_value(source_prose, *match.span(), prior) for match in occurrences):
             issues.append("factory_station:quantity_as_identifier:" + fact["code"])
     missing_specs = _specs(source) - _specs(candidate)
     issues.extend("factory_station:specification_changed:" + spec for spec in missing_specs)

@@ -15,8 +15,10 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
+import factory_station_catalog as stations
+
 FACTORY_QUANTITY_SEMANTICS_API_VERSION = 2
-FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-10-07.1-relative-object-order"
+FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-11-19.1-evidence-bound-numbers"
 
 
 @dataclass(frozen=True)
@@ -212,16 +214,14 @@ def _looks_like_packaging_verb(text: str, match: re.Match[str]) -> bool:
     return bool(re.search(r"(?:要|需|先|再|幫|帮)?包$", left))
 
 
-_DISPOSAL_BA_OBJECT_RE = re.compile(
-    r"\s*(?:(?:這|这|那|此|該|该)\s*(?:些|幾|几|批|捆|個|个)"
-    r"|(?:這|这|那)?\s*(?:[一二兩两三四五六七八九十百幾几]+|\d+)\s*[捆把支條条根件批箱]"
-    r"|(?:它們|它们|它)(?=[都也全先就要])|(?:它們|它们|它)$)")
-
-
-@memoize
 def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict[str, Any]:
     if not str(src_lang or "").lower().startswith("zh") or not str(tgt_lang or "").lower().startswith("id"):
         return {"active": False, "atoms": [], "relations": [], "distributive": False}
+    return _build_frame(source, stations.ba_antecedent(source))
+
+
+@memoize
+def _build_frame(source, antecedent):
     text = _normalise_source(source)
     # A deictic lot reference such as 這批料 is an explicit material scope,
     # not an omitted classifier just because the source has no numeral.
@@ -236,6 +236,7 @@ def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict
     atoms: List[QuantityAtom] = []
     occupied: List[Tuple[int, int]] = []
     disposal_actors: List[str] = []
+    unresolved_numbers: List[str] = []
 
     raw_matches: List[Tuple[int, int, str, re.Match[str]]] = []
     for match in _EACH_QUANTITY_RE.finditer(text):
@@ -258,16 +259,16 @@ def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict
             continue
         if mode == "cardinal" and _looks_like_packaging_verb(text, match):
             continue
-        # 「480把兩捆都打成HOLD」: when 把 is directly followed by its own object
-        # (another counted quantity, or a demonstrative), 把 is the disposal
-        # marker and the number before it names a station/machine/actor, not
-        # a count of bundles.  Counting it forced "480 bundel" into the target.
-        if (mode == "cardinal" and match.group("classifier") == "把"
-                and _DISPOSAL_BA_OBJECT_RE.match(text, end)):
-            occupied.append((start, end))
-            if re.fullmatch(r"\d+", match.group("number") or ""):
-                disposal_actors.append(match.group("number"))
-            continue
+        if mode == "cardinal" and match.group("classifier") == "把":
+            role = stations.number_ba_role(text, start, match.end("number"), antecedent)
+            if role != "count":
+                occupied.append((start, end))
+                number = match.group("number")
+                if role == "actor" and number.isdecimal():
+                    disposal_actors.append(number)
+                elif role == "unresolved":
+                    unresolved_numbers.append(number)
+                continue
         if mode == "each":
             classifier = match.group("each_cls")
             value = Decimal("1")
@@ -360,7 +361,7 @@ def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict
     distributive = bool(_DISTRIBUTIVE_RE.search(text))
     structurally_specific = any(a.category not in {"generic_count", "item_count", "machine_count"} for a in atoms)
     relative_items = any(a.quantifier.startswith("relative_") for a in atoms)
-    active = bool(disposal_actors or lot_references or (atoms and (structurally_specific or relative_items or distributive or relations)))
+    active = bool(disposal_actors or unresolved_numbers or lot_references or (atoms and (structurally_specific or relative_items or distributive or relations)))
     return {
         "active": active,
         "source": text,
@@ -369,6 +370,7 @@ def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict
         "distributive": distributive,
         "lot_references": lot_references,
         "disposal_actors": disposal_actors,
+        "unresolved_numbers": unresolved_numbers,
         "version": FACTORY_QUANTITY_SEMANTICS_BUILD_ID,
     }
 
@@ -510,10 +512,16 @@ def validate_translation(frame: Mapping[str, Any], candidate: Any) -> Tuple[bool
     atoms = _atom_map(frame)
     found: Dict[str, Tuple[int, int]] = {}
 
-    # 「480把兩捆…」: 480 is who acted, never a count of 480 bundles.
-    for actor in frame.get("disposal_actors", []) or []:
-        if re.search(rf"(?<![A-Za-z0-9.,]){re.escape(str(actor))}\s+(?:bundel|bendel|ikat|ikatan|batang)\b", low):
+    for actor in set(frame.get("disposal_actors", ())):
+        occurrences = list(re.finditer(rf"(?<![\w.,]){re.escape(actor)}(?![\w]|[.,]\d)", low))
+        counted = sum(bool(re.match(r"\s+(?:bundel|bendel|ikat|ikatan|batang)\b", low[m.end():]))
+                      for m in occurrences)
+        permitted = sum(a["value"] == actor and a["category"] in ("material_bundle", "rod_piece")
+                        for a in atoms.values())
+        if counted > permitted:
             issues.append(f"quantity_semantics:actor_number_counted_as_quantity:{actor}")
+        elif len(occurrences) == counted:
+            issues.append(f"quantity_semantics:actor_number_missing:{actor}")
 
     for atom_id, atom in atoms.items():
         span = _find_atom(target, atom)
@@ -576,9 +584,14 @@ def build_prompt(frame: Mapping[str, Any]) -> str:
         "This is a compositional quantity frame. Keep counts attached to their nouns; never move a count to another clause or invent a data count from 一下 or an indefinite article.",
     ]
     for actor in frame.get("disposal_actors", []) or []:
+        shared = any(a["value"] == actor and a["category"] in ("material_bundle", "rod_piece")
+                     for a in atoms.values())
         lines.append(f"{actor}把… : 把 here is the disposal marker (把 + object + verb), so {actor} names who acted "
-                     f"(a station/machine/its people, e.g. 'orang {actor}' / '{actor}'), not a count. "
-                     f"Never write '{actor} bundel'.")
+                     f"(e.g. 'orang {actor}' / '{actor}'). " +
+                     ("Keep the separate explicit object count too." if shared else f"Never write '{actor} bundel'."))
+    for number in dict.fromkeys(frame.get("unresolved_numbers", ())):
+        lines.append(f"Keep {number}. Its role is unresolved here. Use the source and linked original only; "
+                     "leave the identifier neutral when neither establishes a unit.")
     for atom in frame.get("atoms", []) or []:
         if atom.get("quantifier") in {"relative_previous", "relative_next"}:
             order = "sebelumnya" if atom["quantifier"] == "relative_previous" else "berikutnya/selanjutnya"

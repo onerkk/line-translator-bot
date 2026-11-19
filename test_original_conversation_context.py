@@ -224,11 +224,12 @@ def test_failed_first_translation_still_informs_a_real_one_call_reply(pipeline, 
     assert not queue.get(G + ':answer')
 
 
-def test_wrong_first_candidate_is_rejected_then_repaired_with_same_context(pipeline, monkeypatch):
+def test_wrong_first_candidate_is_repaired_locally_with_the_original_context(pipeline, monkeypatch):
     now = failed_first_turn(monkeypatch)
     pipeline.candidates = ['__MENTION_0__ sudah menaruhnya', '__MENTION_0__ ' + GOOD]
     app.handle_message(message(CURRENT, 'answer', B, A, now))
-    assert '@十元 sudah menaruhnya' in delivered_text(pipeline)
+    assert '@十元 ' + GOOD in delivered_text(pipeline)
+    assert 'menaruhnya' not in delivered_text(pipeline)
     assert len(pipeline.calls) == 1
     assert all(PRIOR in json.dumps(prompt, ensure_ascii=False) for prompt in pipeline.prompts)
 

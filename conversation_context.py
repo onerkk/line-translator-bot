@@ -406,3 +406,27 @@ def validate_resolution(resolution, target, tgt):
     if state == "pending" and not pending:
         issues.append("conversation_context:pending_reply_state_changed")
     return issues
+
+
+def repair_resolved_reply(source, candidate, src, tgt):
+    """Repair only a fully recognized short answer to its linked original."""
+    resolution = resolve_action(source, src, current_for(source))
+    if not resolution or not validate_resolution(resolution, candidate, tgt):
+        return ""
+    pending = resolution["state"] == "pending"
+    release = resolution["sense"] == "erp_data_release"
+    first_person = bool(re.match(r"^(?:我|saya\b)", body(source), re.I))
+    if tgt == "id":
+        state = "belum" if pending else "sudah"
+        if first_person:
+            action = "me-release data" if release else "meletakkannya"
+            text = f"Saya {state} {action}."
+        elif release:
+            text = f"Datanya {state} di-release."
+        else:
+            text = f"{state.capitalize()} diletakkan."
+    else:
+        action = "放行" if release else "放好"
+        text = ("我" if first_person else "") + ("還沒" + action if pending else "已經" + action + "了") + "。"
+    mentions = list(resolution["mentions"]) or re.findall(r"__MENTION_\d+__", str(source))
+    return " ".join([*mentions, text])

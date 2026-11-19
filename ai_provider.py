@@ -2892,7 +2892,8 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
         _delta = getattr(response, "_jy_usage_delta", None) or {}
         _recorder.append({"provider": provider,
                           "model": str(_delta.get("model") or getattr(response, "model", "") or model or ""),
-                          "cost_usd": float(_delta.get("cost_usd") or 0.0), "seconds": elapsed, "error": ""})
+                          "cost_usd": float(_delta.get("cost_usd") or 0.0),
+                          "priced": _delta.get("cost_usd") is not None, "seconds": elapsed, "error": ""})
     response = _restore_provider_privacy(response, envelope, structured=bool(kwargs.get("structured_schema")))
     response = _strip_leaked_wrappers(response, messages, structured=bool(kwargs.get("structured_schema")))
     issues = []

@@ -1,6 +1,8 @@
 import os
 import re
 import json
+import math
+import statistics
 import urllib.request
 import urllib.parse
 import logging
@@ -413,7 +415,7 @@ if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_V
     )
 logger.info("[FactoryPolicy] deployment verified %s", factory_translation_policy_module.health())
 
-_EXPECTED_FACTORY_STATION_CATALOG_BUILD_ID = "2026-10-17.1-catalog-abbreviation-retrieval"
+_EXPECTED_FACTORY_STATION_CATALOG_BUILD_ID = "2026-11-19.1-evidence-bound-numbers"
 if factory_station_catalog_module.BUILD_ID != _EXPECTED_FACTORY_STATION_CATALOG_BUILD_ID:
     raise RuntimeError("ERP catalog deployment mismatch. Replace app.py, factory_station_catalog.py and factory_station_data.json together.")
 
@@ -443,7 +445,7 @@ logger.info("[FactoryGuard] deployment verified %s", _FACTORY_TRANSLATION_GUARD_
 
 _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION = 2
 # This version binds abstract/record classifiers to their source referents.
-_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-10-07.1-relative-object-order"
+_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-11-19.1-evidence-bound-numbers"
 if (getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION
         or getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_BUILD_ID", None)
@@ -3532,7 +3534,7 @@ def _log_translation(src_text, tgt_text, src_lang, tgt_lang, model, tokens, conf
     auto-detected factory translation issues even when the final message was
     auto-corrected before being sent.
     """
-    if not translation_logging_enabled:
+    if not translation_logging_enabled or getattr(_tl, "eval_no_cache", False):
         return
     try:
         audit = getattr(_tl, 'factory_audit', None)
@@ -10471,6 +10473,13 @@ except Exception as _review_exc:
     logger.warning("[Reviews] bundles skipped: %s", _review_exc)
     _REVIEW_BUNDLES = []
 
+# Only a cheap trigger. The active, scoped correction still decides whether the
+# old output is wrong today (it may have been superseded, withdrawn or edited).
+_REVIEWED_FAILURE_PAIRS = frozenset(
+    (item["src"], item["tgt"], item["source"].strip(), item["observed"].strip())
+    for bundle in _REVIEW_BUNDLES for item in bundle["items"] if item.get("observed")
+)
+
 # v3.32.4: The glossary is a mixed knowledge base.  Normalize it once so every
 # consumer sees the same canonical/soft/disabled policy; descriptions are never
 # silently promoted to mandatory output text.
@@ -12698,11 +12707,29 @@ def _delivery_validation_issues(source_text, candidate, src, tgt):
     return issues
 
 
+def _approved_review_replacement(source, candidate, src, tgt):
+    if (src, tgt, str(source).strip(), str(candidate).strip()) not in _REVIEWED_FAILURE_PAIRS:
+        return None
+    if getattr(_tl, "eval_no_cache", False) or _translation_cache_context_bound(source):
+        return None
+    cases = _retrieve_verified_translation_cases(source, src, tgt)
+    approved = translation_casebook_module.exact_verified_target(source, cases)
+    if approved and approved != candidate and any(
+        str(case.get("source") or "").strip() == source.strip()
+        and case.get("target") == approved and case.get("bad_target") == candidate
+        for case in cases if case.get("verified_correction")
+    ):
+        return approved
+    return None
+
+
 def _delivery_validation_issues_impl(source_text, candidate, src, tgt):
     """Collect current generic + factory hard issues for candidate comparison."""
     if not candidate or not isinstance(candidate, str):
         return ["empty_candidate"]
     found = []
+    if _approved_review_replacement(source_text, candidate, src, tgt):
+        found.append("reviewed_output:active_correction")
     try:
         pairs = ge_module.collect_applicable_pairs(
             source_text,
@@ -12835,8 +12862,16 @@ def _best_effort_factory_delivery(source_text, candidate, src, tgt, *, issues=No
         defects = _delivery_validation_issues(source_text, value, src, tgt)
         return value if not defects else None
 
+    if "reviewed_output:active_correction" in issue_list:
+        approved = _approved_review_replacement(source_text, candidate, src, tgt)
+        if approved and _verified_local(approved):
+            return approved
+
     # Complete bidirectional source relations are authoritative and can be
     # rendered without trusting or repairing a degraded provider sentence.
+    reply = conversation_context.repair_resolved_reply(source_text, candidate, src, tgt)
+    if reply and _verified_local(reply):
+        return reply
     relation_fallback = factory_message_semantics_module.translate_source_directly(
         source_text, src, tgt
     )
@@ -12951,10 +12986,33 @@ def _best_effort_factory_delivery(source_text, candidate, src, tgt, *, issues=No
         cacheable=not bool(degraded_issues),
     )
     if degraded_issues:
-        logger.error(
-            "[DeliveryQuality] translation retained; learning disabled; alerts=%s",
-            degraded_issues[:20],
-        )
+        logger.warning("[DeliveryQuality] learning disabled; alerts=%s", degraded_issues[:20])
+    # A confirmed identifier/count reversal is actionable misinformation. All
+    # source-based and verified alternatives above have already been exhausted.
+    # Explain the specific fact in the reader's language and retain the entire
+    # original (including mentions and negations) without another provider call.
+    numbers = []
+    for issue in objective:
+        parts = issue.split(":")
+        if len(parts) >= 2 and parts[-1].isdecimal() and parts[-2] in {
+            "actor_number_counted_as_quantity", "identifier_as_quantity", "quantity_as_identifier"
+        }:
+            numbers.append(parts[-1])
+    if numbers:
+        frame = factory_quantity_semantics_module.build_frame(source_text, src, tgt)
+        identities = {row["code"] for row in factory_station_catalog_module.station_facts(source_text, src)}
+        identities.update(frame.get("disposal_actors", ()))
+        facts = []
+        for number in dict.fromkeys(numbers):
+            if number in identities:
+                facts.append(("Kode " if tgt == "id" else "代號 ") + number)
+            else:
+                facts.append(("Jumlah " if tgt == "id" else "數量 ") + number)
+        if tgt == "id":
+            facts.extend(a["value"] + " " + a["canonical_id"] for a in frame.get("atoms", ())
+                         if a["quantifier"] == "cardinal" and a["category"] in {"material_bundle", "rod_piece"})
+        heading = "Mohon cek tindakan pada pesan asli." if tgt == "id" else "請依原文核對動作。"
+        return " / ".join(dict.fromkeys(facts)) + "\n" + heading + "\n" + source_text
     return best
 
 def _emergency_translation_fallback(source_text, src, tgt, mention_placeholders=None):
@@ -13540,6 +13598,7 @@ def _try_reply_translation_plan(job_key, payload, plan, reply_token):
     except Exception as exc:
         logger.warning("LINE reply failed; using durable push: %s", type(exc).__name__)
         return False, None
+    _record_line_acceptance(payload)
     plan["next_batch"] = len(line_delivery_module.message_batches(plan["messages"]))
     _delivery_checkpoint(job_key, {"delivery": plan})
     if factory_hub:
@@ -13633,6 +13692,8 @@ def _translation_retry_push_chunks(job_key, payload, text, *, max_messages=5,
             notification_disabled=bool(payload.get("notification_disabled")),
             mentions=(payload.get("factory_event") or plan.get("factory_event") or {}).get("mentions"),
         )
+        if index + 1 == len(batches):
+            _record_line_acceptance(payload)
         plan["next_batch"] = index + 1
         _delivery_checkpoint(checkpoint_key, {"delivery": plan})
     if factory_hub:
@@ -14049,6 +14110,7 @@ def _schedule_text_translation_retry(
         "quote_token": ctx.get("quote_token"),
         "source_text": source_text,
         "src_lang": str(src_lang),
+        "webhook_received_at": webhook_runtime.received_at() if webhook_runtime.trace_id() else None,
         "reply_window": (getattr(_translation_delivery_state, "reply_window", None)
                          if not from_image_ocr and not from_file else None),
         "target_langs": targets,
@@ -14389,7 +14451,11 @@ def _conversation_translation_scope(function):
         group = _conversation_group_id()
         snapshot = getattr(_tl, "conversation_snapshot", None)
         enabled = bool(group and get_conv_context_enabled(group))
-        if not enabled:
+        replay = conversation_context.current_for(text) if getattr(_tl, "eval_no_cache", False) else None
+        if replay is not None:
+            snapshot = replay
+            enabled = True
+        elif not enabled:
             snapshot = conversation_context.empty(group, text, "disabled")
         elif not (snapshot and snapshot.get("group_id") == group
                   and snapshot.get("source_key") == conversation_context.source_key(text)):
@@ -16453,26 +16519,42 @@ def _normalize_glossary_case(source, translated):
 
 
 _LATENCY_SAMPLES = _collections.deque(maxlen=600)
+_LINE_ACCEPTANCE_SAMPLES = _collections.deque(maxlen=600)
 
 
-def _record_translation_latency(text, ms, group_id, ok):
+def _record_line_acceptance(payload):
+    if payload.get("job_kind") != "text":
+        return
+    received = payload.get("webhook_received_at") or (payload.get("reply_window") or {}).get("received_at")
+    now = time.time()
+    if isinstance(received, (int, float)) and 0 < received <= now:
+        _LINE_ACCEPTANCE_SAMPLES.append((now, payload.get("group_id") or payload.get("user_id"),
+                                         round((now - received) * 1000)))
+
+
+def _record_translation_latency(text, ms, group_id, ok, calls=None):
     """Rolling per-translation timing for /速度 (in memory; cheap)."""
+    if getattr(_tl, "eval_no_cache", False):
+        return
+    priced = calls is not None and all(c.get("priced") for c in calls)
     _LATENCY_SAMPLES.append({"ts": time.time(), "ms": round(ms), "chars": len(text or ""),
-                             "group_id": group_id, "ok": ok})
+                             "group_id": group_id, "ok": ok, "calls": len(calls or ()),
+                             "usd": sum(c["cost_usd"] for c in calls) if priced else None})
 
 
 def _latency_report(group_id=None, hours=24):
     cutoff = time.time() - hours * 3600
     rows = [r for r in list(_LATENCY_SAMPLES) if r["ts"] >= cutoff and (not group_id or r["group_id"] == group_id)]
-    def pct(values, p):
-        if not values:
-            return 0
-        values = sorted(values)
-        return values[min(len(values) - 1, int(round(p * (len(values) - 1))))]
     out = {}
     for name, sel in (("短句（30字內）", lambda r: r["chars"] <= 30), ("長訊息", lambda r: r["chars"] > 30)):
-        ms = [r["ms"] for r in rows if sel(r)]
-        out[name] = {"n": len(ms), "p50": pct(ms, .5), "p90": pct(ms, .9), "max": max(ms) if ms else 0}
+        selected = [r for r in rows if sel(r)]
+        ms = sorted(r["ms"] for r in selected)
+        costs = [r["usd"] for r in selected if r.get("usd") is not None]
+        out[name] = {"n": len(ms), "p50": statistics.median(ms) if ms else 0,
+                     "p90": ms[math.ceil(.90 * len(ms))-1] if ms else 0,
+                     "p95": ms[math.ceil(.95 * len(ms))-1] if ms else 0, "max": max(ms) if ms else 0,
+                     "calls": sum(r.get("calls", 0) for r in selected), "priced": len(costs),
+                     "twd_per_1000": statistics.mean(costs) * USD_TO_TWD * 1000 if costs else None}
     return out
 
 
@@ -16520,7 +16602,8 @@ def _run_model_compare_and_push(group_id, limit=20):
         try:
             _event_log_write("model_compare", {"version": report.get("version"), "cases": report.get("cases"),
                                                "summary": [{k: s.get(k) for k in ("key", "n", "wrong", "avg_seconds",
-                                                            "p90_seconds", "cost_usd", "twd_per_1000", "models",
+                                                            "p90_seconds", "p50_seconds", "p95_seconds", "calls",
+                                                            "priced", "directions", "cost_usd", "twd_per_1000", "models",
                                                             "wrong_items")} for s in report.get("summary", [])]})
         except Exception:
             pass
@@ -16578,10 +16661,17 @@ def translate(text, src, tgt):
     markup; cleaning at the exit fixes those without purging the stores.
     """
     _started = time.monotonic()
-    result = _translate_unsanitized(text, src, tgt)
+    calls = []
+    record = (not getattr(_tl, "eval_no_cache", False) and ai_provider._CALL_RECORDER.get() is None)
+    token = ai_provider._CALL_RECORDER.set(calls) if record else None
+    try:
+        result = _translate_unsanitized(text, src, tgt)
+    finally:
+        if token is not None:
+            ai_provider._CALL_RECORDER.reset(token)
     try:
         _record_translation_latency(text, (time.monotonic() - _started) * 1000.0,
-                                    getattr(_tl, "group_id", "") or "", bool(result))
+                                    getattr(_tl, "group_id", "") or "", bool(result), calls if record else None)
     except Exception:
         pass
     if isinstance(result, str) and result:
@@ -20643,10 +20733,17 @@ def handle_message(event):
             _lines = ["⏱ 翻譯速度（本群，最近24小時，版本 " + (os.environ.get("RENDER_GIT_COMMIT", "")[:7] or "?") + "）"]
             for _name, _v in _rep.items():
                 if _v["n"]:
-                    _lines.append(f"{_name}：{_v['n']} 則｜一般 {_v['p50']/1000:.1f} 秒｜慢的 {_v['p90']/1000:.1f} 秒｜最慢 {_v['max']/1000:.1f} 秒")
+                    _lines.append(f"{_name} {_v['n']} 則｜翻譯中位 {_v['p50']/1000:.1f} 秒、P95 {_v['p95']/1000:.1f} 秒｜模型呼叫 {_v['calls']} 次")
+                    if _v["priced"]:
+                        _lines.append(f"　語言模型每千則約 NT${_v['twd_per_1000']:.2f}（有用量資料 {_v['priced']}/{_v['n']} 則）")
                 else:
                     _lines.append(f"{_name}：還沒有資料")
-            _lines.append("（一般＝中位數；慢的＝最慢的一成）")
+            _sent = sorted(ms for ts, group, ms in list(_LINE_ACCEPTANCE_SAMPLES)
+                           if group == group_id and ts >= time.time() - 86400)
+            if _sent:
+                _p95 = _sent[math.ceil(.95 * len(_sent)) - 1]
+                _lines.append(f"收到訊息到 LINE 接受完整回覆 {len(_sent)} 則｜中位 {statistics.median(_sent)/1000:.1f} 秒、P95 {_p95/1000:.1f} 秒")
+            _lines.append("P95 表示 95% 的樣本在這個時間內完成。")
             with ApiClient(configuration) as api_client:
                 MessagingApi(api_client).reply_message(ReplyMessageRequest(
                     reply_token=event.reply_token, messages=[TextMessage(text="\n".join(_lines))]))

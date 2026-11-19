@@ -33,8 +33,9 @@ from typing import Any, Dict, List, Optional
 
 import learning_loop_eval as harness
 import translation_reviews
+import conversation_context
 
-EVAL_VERSION = "2026-11-11.2-variant"
+EVAL_VERSION = "2026-11-19.3-original-turns"
 MODES = (("untrained", True), ("trained", False))
 _LANG = {"zh": "Traditional Chinese (Taiwan factory chat)", "id": "Indonesian (factory chat)"}
 
@@ -44,7 +45,10 @@ Write ONE new message in the SAME language that a worker could plausibly send an
 contains the SAME tricky point, so a translator could make the same mistake again.
 Change the other details: different IDs / numbers / times / names / station codes and
 different surrounding wording. Keep it about as long as the original. No @mentions.
-Output only the new message text.
+Return JSON {"message":"the new current message","previous":"a short prior original when
+needed to interpret the current message, otherwise an empty string"}. Use consistent
+identifiers across turns. The previous turn is ordinary shop-floor dialogue in the
+source language. Omit explanations, the target translation and reviewer instructions.
 
 Original message (%s): %s
 Reviewer's note on the mistake: %s"""
@@ -73,8 +77,13 @@ def load_cases(limit: int, seed: Optional[int] = None) -> List[Dict[str, Any]]:
                           "original": item.get("observed", ""), "reason": item.get("reason", ""),
                           "src_lang": item["src"], "tgt_lang": item["tgt"],
                           "category": item.get("category", "other")})
-    random.Random(seed if seed is not None else int(time.time())).shuffle(cases)
-    return cases[: max(1, int(limit))]
+    rng = random.Random(seed if seed is not None else int(time.time()))
+    rng.shuffle(cases)
+    # This is an exam of reviewed mistakes, not a traffic-weighted sample.
+    # Alternate directions while both have cases so a small exam covers each.
+    buckets = [[c for c in cases if c["src_lang"] == lang] for lang in ("zh", "id")]
+    mixed = [bucket[i] for i in range(max(map(len, buckets))) for bucket in buckets if i < len(bucket)]
+    return mixed[:max(1, int(limit))]
 
 
 def _ask(app, model: str, prompt: str, max_tokens: int) -> str:
@@ -90,10 +99,43 @@ def make_variant(app, case: Dict[str, Any], model: str) -> str:
                                                  case["source"], case["reason"] or "(none)"), 400)
     except Exception:
         return ""
+    text = text.strip()
+    first, last = text.find("{"), text.rfind("}")
+    if first >= 0:
+        try:
+            pair = json.loads(text[first:last + 1])
+        except ValueError:
+            return ""
+        if not isinstance(pair, dict) or not isinstance(pair.get("message"), str):
+            return ""
+        previous = pair.get("previous", "")
+        if not isinstance(previous, str) or len(previous) > conversation_context.MAX_SOURCE:
+            return ""
+        text = pair["message"]
+        case["exam_previous"] = previous.strip()
     text = text.strip().strip('"').strip("「」").strip()
     if not text or text == case["source"].strip() or len(text) > max(400, 3 * len(case["source"])):
         return ""
     return text
+
+
+def exam_snapshot(case, message):
+    """Build a replay from this exam's originals; never open a production journal."""
+    previous = case.get("exam_previous")
+    if not previous:
+        return None
+    snap = conversation_context.empty("", message)
+    snap.update(author="B", timestamp=1, media_evidence=[])
+    row = dict(message_id="exam-prior", author="A", recipients=[], text=previous,
+               ts=0, lang=case["src_lang"])
+    return conversation_context.select(snap, [row], message, quoted_id=row["message_id"])
+
+
+def judge_input(case, message):
+    if case.get("exam_previous"):
+        return json.dumps({"previous_original": case["exam_previous"], "current_message": message},
+                          ensure_ascii=False)
+    return message
 
 
 def translate_text(app, text: str, src: str, tgt: str, hide_learning: bool) -> str:
@@ -119,10 +161,12 @@ def judge_repeat(app, case: Dict[str, Any], variant: str, output: str, model: st
     try:
         text = _ask(app, model, REPEAT_PROMPT % (case["source"], case["original"] or "(not recorded)",
                                                  case["corrected"], case["reason"] or "(none)",
-                                                 variant, output), 120)
+                                                 judge_input(case, variant), output), 120)
         start, end = text.find("{"), text.rfind("}")
         data = json.loads(text[start:end + 1])
-        return {"repeats": bool(data.get("repeats")), "note": str(data.get("note") or "")[:80]}
+        if not isinstance(data.get("repeats"), bool):
+            raise ValueError("judge did not return a boolean verdict")
+        return {"repeats": data["repeats"], "note": str(data.get("note") or "")[:80]}
     except Exception as exc:
         return {"repeats": None, "note": f"judge error: {type(exc).__name__}"}
 
@@ -138,11 +182,15 @@ def run(app, limit: int = 10, seed: Optional[int] = None, model: Optional[str] =
         if not variant:
             skipped += 1
             continue
-        entry = {"id": case["id"], "item_id": case["item_id"], "variant": variant}
+        entry = {"id": case["id"], "item_id": case["item_id"], "variant": variant,
+                 "previous": case.get("exam_previous", "")}
         for mode, hide in MODES:
-            output = translate_text(app, variant, case["src_lang"], case["tgt_lang"], hide)
+            with conversation_context.scope(exam_snapshot(case, variant)):
+                output = translate_text(app, variant, case["src_lang"], case["tgt_lang"], hide)
             if not output or output.startswith("[error"):
                 entry[mode] = {"output": output, "repeats": None, "note": "no translation"}
+            elif mode == "trained" and entry["untrained"]["output"] == output and entry["untrained"]["repeats"] is not None:
+                entry[mode] = dict(entry["untrained"])
             else:
                 entry[mode] = dict(judge_fn(app, case, variant, output, model), output=output)
         results.append(entry)

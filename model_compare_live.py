@@ -17,14 +17,16 @@ message is sent from here.
 from __future__ import annotations
 
 import json
+import math
 import statistics
 import time
 from typing import Any, Callable, Dict, List, Optional
 
 import ai_provider
+import conversation_context
 import learning_eval_live
 
-COMPARE_VERSION = "2026-11-19.2-hybrid"
+COMPARE_VERSION = "2026-11-19.3-context-and-latency"
 USD_TO_TWD = 32.0
 
 # (key, label, provider, model).  provider None = the live routing as configured.
@@ -88,7 +90,7 @@ def translate_with(app, text: str, src: str, tgt: str, provider: Optional[str], 
     rec_token = ai_provider._CALL_RECORDER.set(calls)
     route_token = ai_provider._FORCED_ROUTE.set((provider, model) if provider else None)
     hybrid_var = getattr(app, "_RISK_ROUTE_OVERRIDE", None)
-    hybrid_token = hybrid_var.set(model == "hybrid") if hybrid_var is not None and not provider else None
+    hybrid_token = hybrid_var.set(True) if hybrid_var is not None and model == "hybrid" else None
     started = time.monotonic()
     try:
         output = learning_eval_live.translate_text(app, text, src, tgt, hide_learning=False)
@@ -103,6 +105,7 @@ def translate_with(app, text: str, src: str, tgt: str, provider: Optional[str], 
         # fallback (e.g. public NMT) and must not be scored as its work.
         output = "[error: " + (errors[0] if errors else "no call to the model") + "]"
     return {"output": output, "seconds": time.monotonic() - started,
+            "priced": all(c.get("priced") for c in calls),
             "cost_usd": sum(c.get("cost_usd", 0.0) for c in calls),
             "models": sorted({c["model"] for c in calls if c.get("model") and not c.get("error")}),
             "calls": len(calls), "errors": errors}
@@ -131,13 +134,15 @@ def _judge_once(app, model: str, prompt: str, provider: Optional[str] = None) ->
         ai_provider._FORCED_ROUTE.reset(token)
     start, end = text.find("{"), text.rfind("}")
     data = json.loads(text[start:end + 1])
-    return {"correct": bool(data.get("correct")), "error": str(data.get("error") or "")[:40], "judge": model}
+    if not isinstance(data.get("correct"), bool):
+        raise ValueError("judge did not return a boolean verdict")
+    return {"correct": data["correct"], "error": str(data.get("error") or "")[:40], "judge": model}
 
 
 def judge(app, case: Dict[str, Any], variant: str, output: str, model: str,
           provider: Optional[str] = None) -> Dict[str, Any]:
     prompt = JUDGE_PROMPT % (case["source"], case["original"] or "(not recorded)", case["corrected"],
-                             case["reason"] or "(none)", variant, output)
+                             case["reason"] or "(none)", learning_eval_live.judge_input(case, variant), output)
     failures = []
     for cand_provider, candidate in ((provider, model), (None, app.pick_model("評分"))):
         try:
@@ -168,17 +173,24 @@ def run(app, limit: int = 20, seed: Optional[int] = None, judge_model: Optional[
             skipped += 1
     per: Dict[str, Dict[str, Any]] = {key: {"label": label, "rows": []} for key, label, _p, _m in configs}
     for case, variant in cases:
+        verdicts = {}
         for key, _label, provider, model in configs:
-            res = translate_fn(app, variant, case["src_lang"], case["tgt_lang"], provider, model)
+            with conversation_context.scope(learning_eval_live.exam_snapshot(case, variant)):
+                res = translate_fn(app, variant, case["src_lang"], case["tgt_lang"], provider, model)
             out = res.get("output") or ""
             if not out or out.startswith("[error"):
                 reason = (res.get("errors") or [""])[0]
                 verdict = {"correct": False, "error": ("模型沒有回應" + (f"（{reason}）" if reason else ""))
                            if out.startswith("[error") else "沒有譯文"}
+            elif out in verdicts:
+                verdict = verdicts[out]
             else:
                 verdict = (judge_fn(app, case, variant, out, judge_model, judge_provider)
                            if judge_fn is judge else judge_fn(app, case, variant, out, judge_model))
-            per[key]["rows"].append({"id": case["item_id"], "variant": variant, **res, **verdict})
+                if verdict.get("correct") is not None:
+                    verdicts[out] = verdict
+            per[key]["rows"].append({"id": case["item_id"], "variant": variant, "src": case["src_lang"],
+                                     "previous": case.get("exam_previous", ""), **res, **verdict})
     summary = []
     for key, label, provider, model in configs:
         rows = per[key]["rows"]
@@ -194,6 +206,13 @@ def run(app, limit: int = 20, seed: Optional[int] = None, judge_model: Optional[
             "wrong": sum(1 for r in scored if not r["correct"]),
             "avg_seconds": round(statistics.mean(secs), 2) if secs else 0.0,
             "p90_seconds": round(sorted(secs)[max(0, int(len(secs) * 0.9) - 1)], 2) if secs else 0.0,
+            "p50_seconds": round(statistics.median(secs), 2) if secs else 0.0,
+            "p95_seconds": round(sorted(secs)[math.ceil(len(secs) * .95) - 1], 2) if secs else 0.0,
+            "calls": sum(r.get("calls", 0) for r in rows),
+            "priced": sum(r.get("priced", "cost_usd" in r) for r in rows),
+            "directions": {lang: {"scored": sum(r["src"] == lang for r in scored),
+                                  "wrong": sum(r["src"] == lang and not r["correct"] for r in scored)}
+                           for lang in ("zh", "id")},
             "cost_usd": cost,
             "twd_per_1000": round(cost / len(rows) * 1000 * USD_TO_TWD, 1) if rows else 0.0,
             "models": models,
@@ -217,7 +236,8 @@ def run(app, limit: int = 20, seed: Optional[int] = None, judge_model: Optional[
             share, sample = None, 0
     by_key = {e["key"]: e for e in summary}
     estimate = None
-    if share is not None and "current" in by_key and "gpt-6.1-sol" in by_key:
+    if share is not None and all(k in by_key and by_key[k]["n"] and by_key[k]["priced"] == by_key[k]["n"]
+                                 for k in ("current", "gpt-6.1-sol")):
         estimate = round(by_key["current"]["twd_per_1000"] * (1 - share)
                          + by_key["gpt-6.1-sol"]["twd_per_1000"] * share, 1)
     return {"version": COMPARE_VERSION, "ts": int(time.time()), "cases": len(cases), "skipped": skipped,
@@ -236,8 +256,13 @@ def summary_text(report: Dict[str, Any], version: str = "") -> str:
     marks = "①②③④⑤⑥⑦⑧"
     for i, s in enumerate(report["summary"]):
         rate = f"{s['wrong']}/{s['scored']}" if s["scored"] else "—（沒有評到分）"
-        lines.append(f"{marks[i] if i < len(marks) else '•'} {s['label']}：錯 {rate}｜平均 {s['avg_seconds']} 秒"
-                     f"（慢的 {s['p90_seconds']} 秒）｜每千句約 NT${s['twd_per_1000']}")
+        price = (f"每千句約 NT${s['twd_per_1000']}" if s.get("priced", s["n"]) == s["n"]
+                 else f"計價資料 {s['priced']}/{s['n']} 題")
+        lines.append(f"{marks[i] if i < len(marks) else '•'} {s['label']}：錯 {rate}｜{price}")
+        if "directions" in s:
+            zh, idn = s["directions"]["zh"], s["directions"]["id"]
+            lines.append(f"　中翻印錯 {zh['wrong']}/{zh['scored']}，印翻中錯 {idn['wrong']}/{idn['scored']}。"
+                         f"翻譯中位 {s['p50_seconds']} 秒、P95 {s['p95_seconds']} 秒，共 {s['calls']} 次 API。")
         if s["key"] == "current" and s["models"]:
             lines.append("　實際用到：" + "、".join(f"{m}×{c}" for m, c in
                                                 sorted(s["models"].items(), key=lambda kv: -kv[1])[:3]))
@@ -253,18 +278,18 @@ def summary_text(report: Dict[str, Any], version: str = "") -> str:
                 lines.append("　救回：" + "、".join(s["fixes"][:5]))
             if s.get("breaks"):
                 lines.append("　反而錯：" + "、".join(s["breaks"][:5]))
-    complete = all(s["n"] and s["scored"] >= 0.8 * s["n"] for s in report["summary"])
+    complete = all(s["n"] and s["scored"] == s["n"] for s in report["summary"])
     best = min(s["wrong"] for s in report["summary"] if s["scored"]) if any(s["scored"] for s in report["summary"]) else None
     if not complete:
-        lines += ["", "⚠ 有模型評分不到八成，這次結果不能拿來比較，請修好上面的問題後再跑一次。"]
+        lines += ["", "有題目缺少評分，各模型錯題數不能拿來比較。"]
     elif best is not None:
-        close = [s for s in report["summary"] if s["scored"] and s["wrong"] <= best + 1]
+        close = [s for s in report["summary"] if s["wrong"] == best and s.get("priced", s["n"]) == s["n"]]
         live_cost = lambda s: (report["hybrid_live_twd_per_1000"]
                                if s["key"] == "hybrid" and report.get("hybrid_live_twd_per_1000") is not None
                                else s["twd_per_1000"])
-        cheapest = min(close, key=live_cost)
-        lines += ["", f"錯最少：{best} 題。錯得差不多（最多多錯 1 題）裡最便宜的是 {cheapest['label']}。",
-                  "題數少時 1～2 題的差距可能是運氣，要確定可以再跑一次（會抽到別的題目）。"]
+        if close:
+            cheapest = min(close, key=lambda entry: (live_cost(entry), entry.get("p95_seconds", float("inf"))))
+            lines += ["", f"這批題目最低錯 {best} 題。同分且計價完整的方案中，{cheapest['label']} 的估計費用最低。"]
     if report.get("live_hard_share") is not None:
         line = (f"平常訊息裡約 {round(report['live_hard_share'] * 100)}% 屬於困難句"
                 f"（最近 {report['live_sample']} 句）")

@@ -92,6 +92,31 @@ _QUOTED_CONTROL_WORDS = frozenset({
     "NO", "YES", "Y", "N", "OK", "NG", "PASS", "FAIL", "ON", "OFF",
     "OPEN", "CLOSE", "HOLD", "RELEASE", "START", "STOP", "AUTO", "MANUAL",
 })
+_STATUS_VALUE_RE = re.compile(
+    r"(?:(?i:\b(?:status(?:nya)?|berstatus|mode)\b(?:\s*[:=]\s*|\s+(?:(?:menjadi|adalah)\s+)?))"
+    r"|(?:打成|標成|标成|標記為|标记为|狀態|状态|模式)\s*(?:設為|设为|改成|為|为|是|[:：=])?\s*)"
+    r"(?P<value>[A-Z]+)(?![A-Za-z0-9_])"
+)
+_OPPOSITE_STATES = {a: b for pair in (("HOLD", "RELEASE"), ("ON", "OFF"), ("OPEN", "CLOSE"),
+                                       ("START", "STOP"), ("AUTO", "MANUAL"), ("PASS", "FAIL"), ("OK", "NG"))
+                    for a, b in (pair, pair[::-1])}
+_NONASSERTIVE_STATE = re.compile(r"[?？;；\n]|如果|假如|若|還是|还是|或者|[不沒没未別别勿]|"
+                                 r"\b(?:jika|kalau|apabila|atau|belum|bukan|tidak|jangan)\b", re.I)
+
+
+def _opposing_state_field(source, candidate):
+    """A literal, single affirmative field can be compared in either direction."""
+    src = _STATUS_VALUE_RE.search(source)
+    if not src or src["value"] not in _OPPOSITE_STATES or _NONASSERTIVE_STATE.search(source):
+        return None
+    dst = _STATUS_VALUE_RE.search(candidate)
+    if not dst or dst["value"] != _OPPOSITE_STATES[src["value"]] or _NONASSERTIVE_STATE.search(candidate):
+        return None
+    # A transition or a second object's state cannot be repaired as one field.
+    values = re.compile(r"(?<![A-Za-z])(?:" + src["value"] + "|" + dst["value"] + r")(?![A-Za-z])")
+    if len(values.findall(source)) == len(values.findall(candidate)) == 1:
+        return dst.span("value"), src["value"]
+    return None
 
 # Plain uppercase words are not identifiers.  Indonesian factory notices are
 # frequently written in all caps, so the former ``[A-Z]{1,4}`` rule incorrectly
@@ -1092,6 +1117,8 @@ def _target_zh_language_purity_issues(
     allowed.update(_inline_bilingual_allowed_latin(source, candidate, src_lang))
     allowed.update(_source_parenthetical_alias_latin(source, src_lang))
     allowed.update(label.upper() for label in _document_defined_uppercase_labels(source))
+    allowed.update(m["value"] for m in _STATUS_VALUE_RE.finditer(source)
+                   if m["value"] in _QUOTED_CONTROL_WORDS)
     material = structured_report.parse_material_report(source, src_lang)
     if material:
         allowed.update(unit.upper() for _role, _value, unit in material.rows if unit)
@@ -1841,6 +1868,11 @@ def _comparison_integrity_issues(source: str, candidate: str) -> List[str]:
 def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
     """Normalize unambiguous source-bound terms without a model call."""
     result = chat_notice_semantics.canonicalize(source, candidate, src_lang, tgt_lang)
+    state = (_opposing_state_field(source, result)
+             if result and (src_lang, tgt_lang) in {("zh", "id"), ("id", "zh")} else None)
+    if state:
+        (start, end), value = state
+        result = result[:start] + value + result[end:]
     result = chat_operations.canonicalize(source, result, src_lang, tgt_lang)
     result = terminology_module.canonicalize_factory_entities(source, result, src_lang, tgt_lang)
     result = terminology_module.canonicalize_computer_translation(source, result, src_lang, tgt_lang)
@@ -1984,7 +2016,7 @@ def validate_translation(
         immutable_literals=tuple(immutable_literals),
         glossary_pairs=tuple(tuple(pair) for pair in glossary_pairs),
         require_paragraph_fidelity=bool(require_paragraph_fidelity),
-        station_policy=factory_station_catalog.fingerprint(),
+        station_policy=(factory_station_catalog.fingerprint(), factory_station_catalog.ba_antecedent(source)),
         entity_policy=tuple((fact["source"], fact["kind"], tuple(fact["targets"]),
                              tuple(terminology_module.source_aliases(fact["row"])))
                             for fact in terminology_module.factory_entity_facts(source, src_lang)),
@@ -2158,6 +2190,8 @@ def _validate_normalized_translation(
     issues.extend(term_issues)
 
     issues = _dedupe(issues)
+    if (src, tgt) in {("zh", "id"), ("id", "zh")} and _opposing_state_field(source, candidate):
+        issues.append("factory_status:opposite_explicit_value")
     hard, warnings = _partition_issues(issues)
     return ValidationResult(not hard, issues, hard, warnings)
 
