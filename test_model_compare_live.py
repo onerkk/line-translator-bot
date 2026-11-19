@@ -96,9 +96,11 @@ def test_report_scores_each_model_on_the_same_new_sentences():
 
 
 def test_missing_translation_counts_as_wrong_and_unavailable_providers_are_skipped():
-    assert [c[0] for c in cmp.available_configs(lambda p: p == "openai", lambda p: False)] == ["current", "gpt-6.1-sol"]
+    assert [c[0] for c in cmp.available_configs(lambda p: p == "openai", lambda p: False)] == ["current", "hybrid", "gpt-6.1-sol"]
     assert [c[0] for c in cmp.available_configs(lambda p: True, lambda p: p == "anthropic")] == [
-        "current", "gpt-6.1-sol", "gemini-2.5-flash"]
+        "current", "hybrid", "gpt-6.1-sol", "gemini-2.5-flash"]
+    assert [c[0] for c in cmp.available_configs(lambda p: p == "gemini", lambda p: False)] == [
+        "current", "gemini-2.5-flash"]
     assert ("Claude Sonnet 5.5", "額度用完") in cmp.skipped_configs(lambda p: True, lambda p: p == "anthropic")
     report = cmp.run(app, limit=2, seed=1, judge_model="j", variant_model="v",
                      configs=[("current", "現行設定", None, None)],
@@ -156,3 +158,60 @@ def test_judge_falls_back_and_incomplete_runs_are_not_ranked(monkeypatch):
               "judge_failed": ["judge error: gpt-6.1-sol:RuntimeError"], "no_response": 0}]}
     text = cmp.summary_text(report)
     assert "沒有評到分" in text and "評審失敗 1 題" in text and "不能拿來比較" in text and "錯最少" not in text
+
+
+def test_hybrid_routing_is_off_live_and_sends_known_trap_kinds_to_quality(monkeypatch):
+    monkeypatch.setattr(app, "_translation_cp_router_enabled", lambda: True)
+    monkeypatch.delenv("TRANSLATION_RISK_TO_QUALITY", raising=False)
+    routine, quality = app._translation_cp_tier_models()
+    trap = "可以請她們先放這一把嗎"            # matches the 11/18 release review rule
+    plain = "今天天氣很好"
+    assert app._known_trap_cards(trap) and not app._known_trap_cards(plain)
+    app._tl.__dict__.pop("force_model", None)
+    assert app.pick_model(trap) == routine            # live default: unchanged
+    assert app._tl.translation_effort_boost is True   # but it still thinks harder
+    token = app._RISK_ROUTE_OVERRIDE.set(True)
+    try:
+        assert app.pick_model(trap) == quality
+        assert app.pick_model(plain) == routine
+    finally:
+        app._RISK_ROUTE_OVERRIDE.reset(token)
+    monkeypatch.setenv("TRANSLATION_RISK_TO_QUALITY", "1")
+    assert app.pick_model(trap) == quality
+
+
+def test_live_hard_share_counts_live_traffic_only(monkeypatch):
+    monkeypatch.setattr(app, "_RISK_ROUTE_DECISIONS", app._collections.deque(maxlen=10))
+    app._note_risk_route_decision(True)
+    app._note_risk_route_decision(False)
+    app._tl.eval_no_cache = True
+    try:
+        app._note_risk_route_decision(True)
+    finally:
+        app._tl.__dict__.pop("eval_no_cache", None)
+    assert app.risk_route_share() == (0.5, 2)
+
+
+def test_paired_diff_and_live_cost_estimate_and_judge_choice(monkeypatch):
+    configs = [("current", "現行設定", None, None), ("hybrid", "分流（困難句用 Sol）", None, "hybrid"),
+               ("gpt-6.1-sol", "GPT-6.1 Sol", "openai", "gpt-6.1-sol")]
+    def translate(app_module, text, src, tgt, provider, model):
+        n = int(text.split()[-1])
+        ok = {"current": n % 2 == 0, "hybrid": True, "gpt-6.1-sol": n != 0}[model or "current"] if model != "hybrid" else True
+        if model is None:
+            ok = n % 2 == 0
+        return {"output": "ok" if ok else "bad", "seconds": 1.0, "models": [], "calls": 1, "errors": [],
+                "cost_usd": {None: 0.001, "hybrid": 0.004, "gpt-6.1-sol": 0.006}[model]}
+    counter = iter(range(100))
+    monkeypatch.setattr(app, "risk_route_share", lambda hours=72: (0.2, 500))
+    report = cmp.run(app, limit=4, seed=2, judge_model="j", variant_model="v", configs=configs,
+                     variant_fn=lambda a, c, m: f"句 {next(counter)}", translate_fn=translate,
+                     judge_fn=lambda a, c, v, o, m: {"correct": o == "ok", "error": "" if o == "ok" else "錯"})
+    by = {e["key"]: e for e in report["summary"]}
+    assert len(by["hybrid"]["fixes"]) == by["current"]["wrong"] and by["hybrid"]["breaks"] == []
+    assert report["hybrid_live_twd_per_1000"] == round(by["current"]["twd_per_1000"] * 0.8
+                                                       + by["gpt-6.1-sol"]["twd_per_1000"] * 0.2, 1)
+    text = cmp.summary_text(report)
+    assert "比現行：救回" in text and "平常訊息裡約 20% 屬於困難句" in text
+    assert cmp.pick_judge(lambda p: True, lambda p: p == "anthropic") == ("gemini", "gemini-2.5-flash")
+    assert cmp.pick_judge(lambda p: p == "openai", lambda p: False) == (None, "gpt-6.1-sol")

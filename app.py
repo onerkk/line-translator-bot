@@ -160,7 +160,7 @@ import line_api_transport
 import line_reply_window
 import webhook_runtime
 from durable_workers import WorkerPool
-from contextvars import copy_context
+from contextvars import ContextVar, copy_context
 quick_reply_menu_settings = None
 factory_line_settings = {"groups": {}, "stations": []}
 factory_hub = None
@@ -2659,6 +2659,57 @@ def _translation_cp_router_enabled():
     }
 
 
+_RISK_ROUTE_OVERRIDE = ContextVar("risk_route_override", default=None)
+_RISK_ROUTE_DECISIONS = _collections.deque(maxlen=5000)
+
+
+def _risk_route_to_quality():
+    """Hybrid routing switch: hard sentences go to the quality tier.
+
+    Off by default (decided by the owner after /比較).  TRANSLATION_RISK_TO_QUALITY=1
+    turns it on for live traffic; /比較 turns it on only for its own context.
+    """
+    override = _RISK_ROUTE_OVERRIDE.get()
+    if override is not None:
+        return bool(override)
+    return os.environ.get("TRANSLATION_RISK_TO_QUALITY", "0").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _known_trap_cards(text):
+    """Review rules whose trigger matches: this sentence is a kind we once got wrong."""
+    source = str(text or "")
+    if not source.strip():
+        return []
+    src, tgt = ("zh", "id") if re.search(r"[\u4e00-\u9fff]", source) else ("id", "zh")
+    try:
+        cards = _FACTORY_KNOWLEDGE_STORE.retrieve(source, src, tgt, limit=6)
+    except Exception:
+        return []
+    ids = [c.get("id") for c in cards if str(c.get("id", "")).startswith("review_")]
+    if src == "zh":
+        # ERP data release (放行／放了／先放這把) is a high-cost misreading even
+        # when no stored correction matches the wording.
+        try:
+            if (factory_message_semantics_module.build_data_release_frame(source) or {}).get("active"):
+                ids.append("frame:erp_data_release")
+        except Exception:
+            pass
+    return ids
+
+
+def _note_risk_route_decision(hard):
+    """Share of LIVE messages the hybrid mode would upgrade (cost estimate input)."""
+    if getattr(_tl, "eval_no_cache", False):
+        return
+    _RISK_ROUTE_DECISIONS.append((time.time(), bool(hard)))
+
+
+def risk_route_share(hours=72):
+    cutoff = time.time() - hours * 3600
+    rows = [hard for ts, hard in list(_RISK_ROUTE_DECISIONS) if ts >= cutoff]
+    return (sum(rows) / len(rows) if rows else None), len(rows)
+
+
 def _translation_cp_tier_models():
     """Return the canonical routine/quality models for predictable spend.
 
@@ -2722,7 +2773,15 @@ def pick_model(text):
             and (len(text) if isinstance(text, str) else 0) >= model_threshold
         ):
             return _cp_quality_model
-        if _translation_needs_upgrade_model(text):
+        _risky = _translation_needs_upgrade_model(text)
+        _trap = bool(_known_trap_cards(text))
+        _note_risk_route_decision(_risky or _trap)
+        if (_risky or _trap) and _risk_route_to_quality():
+            # 2026-11-19 /比較 (56 hard sentences): Luna 8 wrong, Sol 5 wrong.
+            # Hybrid mode sends only sentences that are risky or match a kind
+            # we already corrected (a review rule fired) to the quality tier.
+            return _cp_quality_model
+        if _risky or _trap:
             _tl.translation_effort_boost = True
         return _cp_routine_model
     try:
