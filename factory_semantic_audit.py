@@ -2316,7 +2316,7 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
 
     counts = frame.get("counts") or {}
     if flags.get("physical_package_unit"):
-        if not flags.get("material_bundle_unit") and re.search(r"\bbundel\b", low, flags=re.I):
+        if not flags.get("material_bundle_unit") and re.search(r"\b(?:bundel|bendel|ikat|ikatan)\b", low, flags=re.I):
             issues.append("factory_semantic_audit:physical_package_mistranslated_as_bundle")
         if not _has_any_target(low, ("bungkus",)):
             issues.append("factory_semantic_audit:physical_package_unit_missing")

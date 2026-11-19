@@ -75,7 +75,7 @@ def _handoff_issues(source, target):
     if pending:
         if re.search(r"\bdisetujui\b", target, re.I):
             found.append("erp_release_as_general_approval")
-        if re.search(r"\b" + pending["station"] + r"\s+(?:semuanya|buah|batang|bundel)\b", target, re.I):
+        if re.search(r"\b" + pending["station"] + r"\s+(?:semuanya|buah|batang|bundel|bendel|ikat|ikatan)\b", target, re.I):
             found.append("inspection_station_as_quantity")
         if re.search(r"\b(?:tidak|belum)\s+(?:bisa|dapat|mau)\s+(?:di)?(?:periksa|memeriksa|melakukan)\b", target, re.I):
             found.append("inspection_ability_or_intent_added")

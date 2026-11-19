@@ -730,3 +730,18 @@ def test_2026_11_19_number_ba_quantity_is_disposal_not_bundle_count():
     # genuine bundle counts keep their quantity
     for text, value in (("3把料先吊走", "3"), ("有三把在490了", "3"), ("昨晚生產兩把R12的", "2"), ("這3把先包", "3")):
         assert [a["value"] for a in q.build_frame(text)["atoms"]] == [value], text
+
+
+def test_2026_11_19_ikat_is_accepted_as_bundle_classifier_everywhere():
+    import app
+    # 捆/把 counts: ikat / ikatan / bundel are all the same bundle noun.
+    for target in ("Dua ikat itu sudah di-HOLD.", "Kedua ikatan itu sudah di-HOLD.", "2 bundel itu sudah di-HOLD."):
+        issues = app._delivery_validation_issues("兩捆都打成HOLD了", target, "zh", "id")
+        assert not [i for i in issues if "atom_missing" in i], (target, issues)
+    # but the station number still may not be counted with ikat either
+    bad = "480 ikat dan 2 ikat semuanya sudah diberi status HOLD."
+    assert any("actor_number_counted_as_quantity:480" in i
+               for i in app._delivery_validation_issues("480把兩捆都打成HOLD了", bad, "zh", "id"))
+    # ikat is not a package (包) either
+    assert any("physical_package" in i or "quantity_semantics" in i
+               for i in app._delivery_validation_issues("每人兩包", "Setiap orang dua ikat.", "zh", "id"))

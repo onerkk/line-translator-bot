@@ -230,7 +230,7 @@ def _alias_context_matches(source: str, start: int, end: int, rule: Mapping) -> 
 _PACKAGING_CONTEXT_RE = re.compile(
     r"工[單单]|包[裝装]|棒材|(?:研磨|[拋抛]光)棒|"
     r"\b(?:work\s*order|book\s*order|lembar\s+kerja|packing|pengemasan|"
-    r"batang|bundel|grinding|polishing)\b", re.I,
+    r"batang|bundel|bendel|ikat|ikatan|grinding|polishing)\b", re.I,
 )
 _OTHER_PROTECTION_SENSE_RE = re.compile(
     r"避孕|保[險险]套|安全套|性行[為为]|性[愛爱]|[陰阴]莖|手機|手机|平板|"

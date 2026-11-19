@@ -5163,7 +5163,7 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
             issues.append("factory_message_semantics:erp_release_mistranslated_as_physical_placement")
 
         object_kind = slots.get("object_kind")
-        if object_kind == "bundle" and not _has_phrase(low, ("bundel",)):
+        if object_kind == "bundle" and not _has_phrase(low, ("bundel", "bendel", "ikat", "ikatan")):
             issues.append("factory_message_semantics:erp_release_bundle_reference_missing")
         elif object_kind == "batch" and not _has_phrase(low, ("batch", "lot")):
             issues.append("factory_message_semantics:erp_release_batch_reference_missing")

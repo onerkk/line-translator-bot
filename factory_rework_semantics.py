@@ -24,8 +24,8 @@ _PAINT_ID = re.compile(
     r"\b(?:pengecatan|cat|mengecat|dicat)(?:nya)?\s+(?:dengan\s+)?semprot(?:an|nya)?\b"
     r"|\b(?:disemprot|menyemprot)(?:kan)?\s+(?:dengan\s+)?cat(?:nya)?\b"
     r"|\bpenyemprotan\s+cat(?:nya)?\b", re.I)
-_WASH_ID = re.compile(r"\b(?:cuci|dicuci|mencuci|pencucian)(?:nya)?\b(?:\s+(?:sekali|material|bundel|batang|barang|ini|itu|tersebut)){0,4}\s+(?:ulang|lagi|kembali)\b", re.I)
-_REPAINT_ID = re.compile(r"\b(?:dicat|mengecat|pengecatan|disemprot|menyemprot)(?:nya)?\b(?:\s+(?:dengan|cat|semprot|semprotan|material|bundel|ini|itu|tersebut|sekali)){0,4}\s+(?:ulang|lagi|kembali)\b", re.I)
+_WASH_ID = re.compile(r"\b(?:cuci|dicuci|mencuci|pencucian)(?:nya)?\b(?:\s+(?:sekali|material|bundel|bendel|ikat|ikatan|batang|barang|ini|itu|tersebut)){0,4}\s+(?:ulang|lagi|kembali)\b", re.I)
+_REPAINT_ID = re.compile(r"\b(?:dicat|mengecat|pengecatan|disemprot|menyemprot)(?:nya)?\b(?:\s+(?:dengan|cat|semprot|semprotan|material|bundel|bendel|ikat|ikatan|ini|itu|tersebut|sekali)){0,4}\s+(?:ulang|lagi|kembali)\b", re.I)
 _BAD_NOMINAL = re.compile(r"\byang\s+salah\s+pengecatan\s+semprot\b", re.I)
 _TARGET_SPLIT = re.compile(
     r"[.!?;\n]+|[,，]\s*(?:sedangkan\s+|sementara\s+)?(?=(?:bundel|ikatan|batang|batch|lot|barang|benda|komponen)\b)", re.I)

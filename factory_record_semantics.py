@@ -150,7 +150,7 @@ def canonicalize_transfer_terms(relations, target):
         elif not re.search(_RECORD_ID, clause, re.I):
             # Keep the candidate's existing bundle quantity/category, changing
             # only the operation's object from the bundles to their records.
-            subject = re.match(r"(?P<space>\s*)(?P<count>\d+|satu|dua|tiga|empat|lima|enam|tujuh|delapan|sembilan|sepuluh)\s+bundel\b", clause, re.I)
+            subject = re.match(r"(?P<space>\s*)(?P<count>\d+|satu|dua|tiga|empat|lima|enam|tujuh|delapan|sembilan|sepuluh)\s+(?:bundel|bendel|ikat|ikatan)\b", clause, re.I)
             if not subject or not relation.get("noncurrent") or not relation.get("bundle_quantities"):
                 continue
             fixed = clause[:subject.end("space")] + "Catatan untuk " + clause[subject.end("space"):subject.end("count")].lower() + clause[subject.end("count"):]

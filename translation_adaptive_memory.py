@@ -17,7 +17,7 @@ from translation_source_identity import canonical_source_key
 
 ADAPTIVE_MEMORY_VERSION = "2026-09-05.1"
 _UNITS = (r"公斤|公克|公噸|毫米|公分|公尺|分鐘|小時|噸|米|把|捆|包|箱|支|根|件|雙|個|"
-          r"kg\b|mm\b|cm\b|meter\b|m\b|ton\b|bundel\b|bundle\b|batang\b|"
+          r"kg\b|mm\b|cm\b|meter\b|m\b|ton\b|bundel\b|bendel\b|ikat\b|ikatan\b|bundle\b|batang\b|"
           r"pak\b|kotak\b|buah\b|pasang\b|menit\b|jam\b")
 _QUANTITY = re.compile(r"(?<![A-Za-z0-9_.,/:-])(\d+(?:[.,]\d+)?)(?=\s*(?:" + _UNITS + r"))", re.I)
 _NUMBER = re.compile(r"(?<![A-Za-z0-9_.,])\d+(?:[.,]\d+)?(?![A-Za-z0-9_.,])")

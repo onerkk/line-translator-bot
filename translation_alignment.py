@@ -318,13 +318,13 @@ def translation_issues(contract: Mapping, target: Any, *, segments: Mapping | No
             if row["next_bundle"]:
                 clauses = re.split(r"[,;.!?\n]", text)
                 owner_linked = any(
-                    re.search(r"\bwork\s*order\b.{0,90}\bbundel\s+(?:berikutnya|selanjutnya)\b|\bbundel\s+(?:berikutnya|selanjutnya)\b.{0,90}\bwork\s*order\b", clause, re.I)
+                    re.search(r"\bwork\s*order\b.{0,90}\b(?:bundel|bendel|ikat|ikatan)\s+(?:berikutnya|selanjutnya)\b|\b(?:bundel|bendel|ikat|ikatan)\s+(?:berikutnya|selanjutnya)\b.{0,90}\bwork\s*order\b", clause, re.I)
                     and _DETACH_ID.search(clause) for clause in clauses)
                 if not owner_linked:
                     issues.append("semantic:next_bundle_work_order_owner_missing")
             if row.get("previous_lift_prerequisite"):
                 previous_lift = any(
-                    re.search(r"\bbundel\s+(?:sebelumnya|terdahulu)\b.{0,60}\b(?:diangkat|diangkatkan|dipindahkan|disingkirkan)\b", clause, re.I)
+                    re.search(r"\b(?:bundel|bendel|ikat|ikatan)\s+(?:sebelumnya|terdahulu)\b.{0,60}\b(?:diangkat|diangkatkan|dipindahkan|disingkirkan)\b", clause, re.I)
                     and re.search(r"\b(?:sebelum|belum|selama)\b", clause, re.I)
                     for clause in re.split(r"[,;.!?\n]", text))
                 if not previous_lift:

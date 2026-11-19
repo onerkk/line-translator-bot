@@ -73,7 +73,7 @@ FACTORY_STATION_ALIAS_RULES = tuple(catalog().get("aliases", ()))
 _NUMBER = re.compile(r"(?<![A-Za-z0-9_.])\d+(?![A-Za-z0-9_]|\.\d)")
 _UNITS = re.compile(
     r"^\s*(?:支|件|把|捆|台|個|个|頂|顶|人|箱|包|袋|批|噸|吨|公斤|公克|米|公分|毫米|秒|分(?:鐘|钟)?|小時|小时|天|度|%|℃|"
-    r"(?:buah|batang|potong|bundel|unit|pcs|orang|ton|kg|g|t|gr(?:am)?|mm|cm|m|meter|menit|detik|jam|hari|rpm)\b)", re.I)
+    r"(?:buah|batang|potong|bundel|bendel|ikat|ikatan|unit|pcs|orang|ton|kg|g|t|gr(?:am)?|mm|cm|m|meter|menit|detik|jam|hari|rpm)\b)", re.I)
 _QUANTITY_LABEL = re.compile(
     r"(?:數量|数量|總數|总数|重量|長度|长度|直徑|直径|速度|金額|金额)\s*(?:為|为|是|[:：=])?\s*$|"
     r"\b(?:jumlah|sebanyak|sejumlah|berjumlah|berat|panjang|diameter|kecepatan|harga)"

@@ -35,8 +35,8 @@ _CLASSIFIERS: Dict[str, ClassifierSpec] = {
     "包": ClassifierSpec("包", "bungkus", ("bungkus",), ("sebungkus",), "package"),
     "雙": ClassifierSpec("雙", "pasang", ("pasang",), ("sepasang",), "pair"),
     "双": ClassifierSpec("双", "pasang", ("pasang",), ("sepasang",), "pair"),
-    "把": ClassifierSpec("把", "bundel", ("bundel",), ("sebundel",), "material_bundle"),
-    "捆": ClassifierSpec("捆", "bundel", ("bundel",), ("sebundel",), "material_bundle"),
+    "把": ClassifierSpec("把", "bundel", ("bundel", "bendel", "ikat", "ikatan"), ("sebundel",), "material_bundle"),
+    "捆": ClassifierSpec("捆", "bundel", ("bundel", "bendel", "ikat", "ikatan"), ("sebundel",), "material_bundle"),
     "支": ClassifierSpec("支", "batang", ("batang",), ("sebatang",), "rod_piece"),
     "根": ClassifierSpec("根", "batang", ("batang",), ("sebatang",), "rod_piece"),
     "台": ClassifierSpec("台", "buah", ("buah",), ("sebuah",), "machine_count"),
@@ -530,7 +530,7 @@ def validate_translation(frame: Mapping[str, Any], candidate: Any) -> Tuple[bool
     # in the same message remains valid.
     has_package = any(atom.get("category") == "package" for atom in atoms.values())
     has_bundle = any(atom.get("category") == "material_bundle" for atom in atoms.values())
-    if has_package and not has_bundle and re.search(r"\bbundel\b", low):
+    if has_package and not has_bundle and re.search(r"\b(?:bundel|bendel|ikat|ikatan)\b", low):
         issues.append("quantity_semantics:package_mistranslated_as_bundle")
     has_pair = any(atom.get("category") == "pair" for atom in atoms.values())
     if has_pair and not re.search(r"\bpasang\b|\bsepasang\b", low):
