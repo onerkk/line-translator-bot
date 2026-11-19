@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "review_id": "2026-11-19-station-ba-disposal",
+  "source": "screenshot review by Claude, 研磨股 11/19 10:09–10:22",
+  "items": [
+    {
+      "id": "station-number-ba-two-bundles-hold",
+      "src": "zh",
+      "tgt": "id",
+      "source": "480把兩捆都打成HOLD了、並且告知尺寸有異常、我們沒有挑選出來了！",
+      "observed": "480 bundel dan 2 ikat semuanya sudah diberi status HOLD dan sudah diberitahukan bahwa ukurannya tidak normal. Kami tidak menyortirnya!",
+      "corrected": "Orang 480 sudah memberi status HOLD pada kedua bundel itu dan memberi tahu bahwa ukurannya tidak normal, jadi kami tidak menyortirnya lagi!",
+      "category": "number_unit",
+      "reason": "480 是站別（前文「昨晚 480 的人量了那批料」），「480把兩捆都打成HOLD」＝480 把那兩捆打成 HOLD；把是處置用法，不是「480 把（捆）」。",
+      "rule": {
+        "when": [
+          [
+            "把"
+          ]
+        ],
+        "regex_any": [
+          "\\d{2,}\\s*把\\s*(?:[這这那]\\s*)?(?:[一二兩两三四五六七八九十幾几]+|\\d+)\\s*[捆把支條条根件批箱]"
+        ],
+        "directions": [
+          "zh-id"
+        ],
+        "title": "「站號＋把＋數量捆…」：把是處置用法，前面的數字是站別",
+        "context": [
+          "「480把兩捆都打成HOLD」＝480（站別／那邊的人）把兩捆打成 HOLD；480 不是數量。",
+          "譯成 Orang 480 / 480 sudah …, 不要寫成 480 bundel。"
+        ],
+        "forbidden": [
+          "480 bundel"
+        ]
+      }
+    }
+  ]
+}

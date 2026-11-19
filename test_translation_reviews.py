@@ -712,3 +712,21 @@ def test_2026_11_19_conjunction_buran_is_not_negation_and_minta_is_request():
     import factory_message_semantics as fms
     assert fms._release_mode("", "不然可能會", "zh") != "negative"
     assert fms._release_mode("Saya akan minta mereka ", "", "id") == "request"
+
+
+def test_2026_11_19_number_ba_quantity_is_disposal_not_bundle_count():
+    import app
+    import factory_quantity_semantics as q
+    src = "480把兩捆都打成HOLD了、並且告知尺寸有異常、我們沒有挑選出來了！"
+    bad = "480 bundel dan 2 bundel semuanya sudah diberi status HOLD."
+    good = ("Orang 480 sudah memberi status HOLD pada kedua bundel itu dan memberi tahu bahwa ukurannya "
+            "tidak normal, jadi kami tidak menyortirnya lagi!")
+    assert any("actor_number_counted_as_quantity:480" in i for i in app._delivery_validation_issues(src, bad, "zh", "id"))
+    assert app._delivery_validation_issues(src, good, "zh", "id") == []
+    assert "Never write '480 bundel'" in q.build_prompt(q.build_frame(src))
+    # same construction, other stations/objects
+    assert [a["value"] for a in q.build_frame("490把這兩捆吊回去")["atoms"]] == ["2"]
+    assert [a["classifier"] for a in q.build_frame("A班把3支拿去研磨")["atoms"]] == ["支"]
+    # genuine bundle counts keep their quantity
+    for text, value in (("3把料先吊走", "3"), ("有三把在490了", "3"), ("昨晚生產兩把R12的", "2"), ("這3把先包", "3")):
+        assert [a["value"] for a in q.build_frame(text)["atoms"]] == [value], text
