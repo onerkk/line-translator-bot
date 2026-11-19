@@ -101,16 +101,25 @@ def translate_with(app, text: str, src: str, tgt: str, provider: Optional[str], 
             "calls": len(calls), "errors": errors}
 
 
+def _judge_once(app, model: str, prompt: str) -> Dict[str, Any]:
+    # Reasoning models spend part of max_completion_tokens thinking before the
+    # JSON appears; a tight cap returns an empty answer.
+    text = learning_eval_live._ask(app, model, prompt, 1200)
+    start, end = text.find("{"), text.rfind("}")
+    data = json.loads(text[start:end + 1])
+    return {"correct": bool(data.get("correct")), "error": str(data.get("error") or "")[:40], "judge": model}
+
+
 def judge(app, case: Dict[str, Any], variant: str, output: str, model: str) -> Dict[str, Any]:
-    try:
-        text = learning_eval_live._ask(app, model, JUDGE_PROMPT % (
-            case["source"], case["original"] or "(not recorded)", case["corrected"],
-            case["reason"] or "(none)", variant, output), 160)
-        start, end = text.find("{"), text.rfind("}")
-        data = json.loads(text[start:end + 1])
-        return {"correct": bool(data.get("correct")), "error": str(data.get("error") or "")[:40]}
-    except Exception as exc:
-        return {"correct": None, "error": f"judge error: {type(exc).__name__}"}
+    prompt = JUDGE_PROMPT % (case["source"], case["original"] or "(not recorded)", case["corrected"],
+                             case["reason"] or "(none)", variant, output)
+    failures = []
+    for candidate in dict.fromkeys([model, app.pick_model("評分")]):
+        try:
+            return _judge_once(app, candidate, prompt)
+        except Exception as exc:
+            failures.append(f"{candidate}:{type(exc).__name__}")
+    return {"correct": None, "error": "judge error: " + ", ".join(failures)}
 
 
 def run(app, limit: int = 20, seed: Optional[int] = None, judge_model: Optional[str] = None,
@@ -136,7 +145,9 @@ def run(app, limit: int = 20, seed: Optional[int] = None, judge_model: Optional[
             res = translate_fn(app, variant, case["src_lang"], case["tgt_lang"], provider, model)
             out = res.get("output") or ""
             if not out or out.startswith("[error"):
-                verdict = {"correct": False, "error": "模型沒有回應" if out.startswith("[error") else "沒有譯文"}
+                reason = (res.get("errors") or [""])[0]
+                verdict = {"correct": False, "error": ("模型沒有回應" + (f"（{reason}）" if reason else ""))
+                           if out.startswith("[error") else "沒有譯文"}
             else:
                 verdict = judge_fn(app, case, variant, out, judge_model)
             per[key]["rows"].append({"id": case["item_id"], "variant": variant, **res, **verdict})
@@ -159,6 +170,8 @@ def run(app, limit: int = 20, seed: Optional[int] = None, judge_model: Optional[
             "twd_per_1000": round(cost / len(rows) * 1000 * USD_TO_TWD, 1) if rows else 0.0,
             "models": models,
             "wrong_items": [(r["id"], r.get("error", "")) for r in scored if not r["correct"]],
+            "judge_failed": [r.get("error", "") for r in rows if r.get("correct") is None],
+            "no_response": sum(1 for r in scored if str(r.get("error", "")).startswith("模型沒有回應")),
         })
     return {"version": COMPARE_VERSION, "ts": int(time.time()), "cases": len(cases), "skipped": skipped,
             "judge_model": judge_model, "summary": summary, "rows": per,
@@ -174,16 +187,23 @@ def summary_text(report: Dict[str, Any], version: str = "") -> str:
              ""]
     marks = "①②③④⑤⑥⑦⑧"
     for i, s in enumerate(report["summary"]):
-        rate = f"{s['wrong']}/{s['scored']}" if s["scored"] else "—"
+        rate = f"{s['wrong']}/{s['scored']}" if s["scored"] else "—（沒有評到分）"
         lines.append(f"{marks[i] if i < len(marks) else '•'} {s['label']}：錯 {rate}｜平均 {s['avg_seconds']} 秒"
                      f"（慢的 {s['p90_seconds']} 秒）｜每千句約 NT${s['twd_per_1000']}")
         if s["key"] == "current" and s["models"]:
             lines.append("　實際用到：" + "、".join(f"{m}×{c}" for m, c in
                                                 sorted(s["models"].items(), key=lambda kv: -kv[1])[:3]))
-        for item_id, err in s["wrong_items"][:3]:
+        if s.get("judge_failed"):
+            lines.append(f"　⚠ 評審失敗 {len(s['judge_failed'])} 題：{s['judge_failed'][0][:60]}")
+        if s.get("no_response"):
+            lines.append(f"　⚠ 模型沒回應 {s['no_response']} 題（算錯）")
+        for item_id, err in [w for w in s["wrong_items"] if not str(w[1]).startswith("模型沒有回應")][:3]:
             lines.append(f"　✗ {item_id}：{err}")
+    complete = all(s["n"] and s["scored"] >= 0.8 * s["n"] for s in report["summary"])
     best = min(s["wrong"] for s in report["summary"] if s["scored"]) if any(s["scored"] for s in report["summary"]) else None
-    if best is not None:
+    if not complete:
+        lines += ["", "⚠ 有模型評分不到八成，這次結果不能拿來比較，請修好上面的問題後再跑一次。"]
+    elif best is not None:
         close = [s for s in report["summary"] if s["scored"] and s["wrong"] <= best + 1]
         cheapest = min(close, key=lambda s: s["twd_per_1000"])
         lines += ["", f"錯最少：{best} 題。錯得差不多（最多多錯 1 題）裡最便宜的是 {cheapest['label']}。",

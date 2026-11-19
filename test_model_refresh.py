@@ -167,7 +167,8 @@ def test_openai_parameter_shaping():
         shaped = calls[-1]
         assert shaped["model"] == "gpt-6.1-sol"
         assert shaped["max_completion_tokens"] == 321
-        assert shaped["reasoning_effort"] == "none"
+        # GPT-6.1 Sol rejects none/minimal (official model page); low is its floor.
+        assert shaped["reasoning_effort"] == "low"
         for unsupported in ("max_tokens", "temperature", "top_p", "seed", "stop", "logprobs"):
             assert unsupported not in shaped
 

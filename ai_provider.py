@@ -239,6 +239,34 @@ def _translation_create_method(client, provider):
     return client.messages.create if provider == "anthropic" else client.chat.completions.create
 
 
+# Lowest reasoning effort each OpenAI model accepts (official model pages,
+# checked 2026-11-19).  GPT-6 Luna accepts none; GPT-6.1 Sol and GPT-6 Astra
+# reject none/minimal ("defaults to medium"), so every "as fast as possible"
+# request to them must go out as low.  Sending none made every Sol call fail.
+# https://developers.openai.com/api/docs/models/gpt-6.1-sol
+_OPENAI_LOWEST_EFFORT = (
+    ("gpt-6.1-sol", "low"),
+    ("gpt-6-astra", "low"),
+)
+_EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def supported_openai_effort(model, effort):
+    """Raise an effort the model rejects to the lowest value it accepts."""
+    if not effort:
+        return effort
+    m = str(model or "").lower()
+    value = str(effort).lower()
+    for prefix, lowest in _OPENAI_LOWEST_EFFORT:
+        if m.startswith(prefix):
+            if value in _EFFORT_ORDER and _EFFORT_ORDER.index(value) < _EFFORT_ORDER.index(lowest):
+                return lowest
+            return value
+    if m.startswith("gpt-6") and value == "minimal":
+        return "none"          # GPT-6 Luna/Sol list none, not minimal
+    return value
+
+
 def _sdk_create(create, call_kwargs):
     scope = _TRANSPORT_SCOPE.get()
     kwargs = dict(call_kwargs)
@@ -3031,6 +3059,8 @@ def _chat_complete_openai(model, messages, **kwargs):
             call_kwargs.pop(_unsupported, None)
         if not _model_lower.endswith("-pro"):
             call_kwargs.setdefault("reasoning_effort", "none")
+    if call_kwargs.get("reasoning_effort"):
+        call_kwargs["reasoning_effort"] = supported_openai_effort(model, call_kwargs["reasoning_effort"])
     # v3.25: 背景執行緒(bgpost/evlog)的呼叫走官方 Flex tier 半價。
     # 偵測:thread 名稱(v3.13 背景池命名)+ config 開關 + 模型支援
     # (官方 flex 支援 gpt-5 系/o 系;gpt-4.1 系不支援 → 自動略過)。
@@ -3587,7 +3617,7 @@ def _chat_complete_stream_openai(model, messages, max_tokens, temperature, **kwa
         if max_tokens is not None:
             call_kwargs["max_completion_tokens"] = max_tokens
         if not model.lower().endswith("-pro"):
-            call_kwargs["reasoning_effort"] = "none"
+            call_kwargs["reasoning_effort"] = supported_openai_effort(model, "none")
     else:
         if max_tokens is not None:
             call_kwargs["max_tokens"] = max_tokens

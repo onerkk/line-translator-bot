@@ -114,3 +114,45 @@ def test_compare_command_is_admin_only_and_listed_in_help():
     assert app._is_admin_only_command("/比較")
     assert app._is_admin_only_command("/比較 40")
     assert any(e["key"] == "compare" for e in line_command_catalog.COMMANDS) if hasattr(line_command_catalog, "COMMANDS") else True
+
+
+def test_sol_and_astra_never_get_an_effort_they_reject():
+    f = ai_provider.supported_openai_effort
+    assert f("gpt-6.1-sol", "none") == "low" and f("gpt-6.1-sol", "minimal") == "low"
+    assert f("gpt-6.1-sol", "medium") == "medium"
+    assert f("gpt-6-astra", "none") == "low"
+    assert f("gpt-6-luna", "none") == "none" and f("gpt-6-luna", "minimal") == "none"
+    seen = {}
+
+    def create(**kw):
+        seen.update(kw)
+        raise RuntimeError("stop here")
+
+    import pytest
+    with patch.object(ai_provider, "_get_openai_client",
+                      return_value=SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))), \
+         patch.object(ai_provider, "_sdk_create", side_effect=lambda c, kw: create(**kw)):
+        with pytest.raises(RuntimeError):
+            ai_provider._chat_complete_openai(model="gpt-6.1-sol", messages=[{"role": "user", "content": "x"}],
+                                              max_tokens=50, reasoning_effort="none")
+    assert seen.get("reasoning_effort") == "low"
+
+
+def test_judge_falls_back_and_incomplete_runs_are_not_ranked(monkeypatch):
+    asked = []
+
+    def ask(app_module, model, prompt, max_tokens):
+        asked.append((model, max_tokens))
+        if model == "gpt-6.1-sol":
+            raise RuntimeError("400")
+        return '{"correct": true, "error": ""}'
+
+    monkeypatch.setattr(cmp.learning_eval_live, "_ask", ask)
+    case = {"source": "a", "original": "b", "corrected": "c", "reason": "d"}
+    v = cmp.judge(app, case, "x", "y", "gpt-6.1-sol")
+    assert v["correct"] is True and v["judge"] != "gpt-6.1-sol" and asked[0] == ("gpt-6.1-sol", 1200)
+    report = {"cases": 3, "summary": [{"key": "current", "label": "現行設定", "n": 3, "scored": 0, "wrong": 0,
+              "avg_seconds": 1, "p90_seconds": 1, "twd_per_1000": 1, "models": {}, "wrong_items": [],
+              "judge_failed": ["judge error: gpt-6.1-sol:RuntimeError"], "no_response": 0}]}
+    text = cmp.summary_text(report)
+    assert "沒有評到分" in text and "評審失敗 1 題" in text and "不能拿來比較" in text and "錯最少" not in text
