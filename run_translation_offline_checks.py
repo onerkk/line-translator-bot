@@ -89,11 +89,26 @@ def offline_network():
         yield
 
 
+
+def _offline_environment(directory):
+    """Blank every external credential and point all state at a temp dir."""
+    import os
+    from pathlib import Path
+    for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+                "GOOGLE_TRANSLATE_API_KEY", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"):
+        os.environ[key] = ""
+    os.environ.update(LINE_CHANNEL_SECRET="offline-cp-probe", LINE_CHANNEL_ACCESS_TOKEN="offline-cp-probe",
+                      REQUIRE_CLOUD_SETTINGS="0", REMINDERS_WORKER_ENABLED="0", LINE_FACTORY_STORE="sqlite")
+    for key in ("LINE_FACTORY_DB_PATH", "TM_DB_PATH", "VECTOR_TM_DB_PATH", "ACTIVE_LEARNING_DB_PATH",
+                "TRANSLATION_RETRY_DB_PATH", "BOT_SETTINGS_CACHE_FILE", "CUSTOM_EXAMPLES_FILE",
+                "PHASE_CONFIG_PATH", "LAST_TRANSLATE_DEBUG_FILE", "TRANSLATION_LOG_FILE"):
+        os.environ[key] = str(Path(directory) / key.lower())
+
+
 def main():
     repo = Path(__file__).resolve().parent
     os.chdir(repo)
     sys.path.insert(0, str(repo))
-    from benchmark_translation_cp import _offline_environment
 
     with tempfile.TemporaryDirectory(prefix="translation-offline-checks-") as state:
         _offline_environment(state)

@@ -94,8 +94,8 @@ def check_quick_reply_assets(repo):
             failures.append(relative + ": missing or incompatible command acknowledgement API 1." + hint)
     if failures:
         raise RuntimeError("Acknowledgement update is incomplete:\n- " + "\n- ".join(failures) +
-                           "\nApply line_quick_reply.py and static/admin_quick_reply.js together at their repository paths, "
-                           "or run python apply_ack116_update.py --repo .\nNo source files were changed by this check.")
+                           "\nCommit line_quick_reply.py and static/admin_quick_reply.js together at their repository paths."
+                           "\nNo source files were changed by this check.")
 
 
 def _check_asset(repo, label, relative_path, prefix, compatible):
@@ -122,8 +122,7 @@ def _check_asset(repo, label, relative_path, prefix, compatible):
             f"{relative_path}: missing, old, or incompatible lifecycle API; expected API 1 "
             "or the verified compatible frontend."
             + location_hint +
-            " Apply the runtime files and tests from the same update, or run "
-            "python apply_ci106_update.py --repo . from the repository root. "
+            " Commit the runtime files and tests from the same change together. "
             "This check does not modify source files or skip the DOM behavior tests."
         )
 
